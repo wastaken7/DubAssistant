@@ -4,14 +4,23 @@ version = "0.1.0"
 edition = "2021"
 description = "DubAssistant - App desktop nativo em Rust para extração, organização e upload de dublagens no CapybaraBR"
 
+[lib]
+name = "dub_assistant"
+path = "src/lib.rs"
+
 [[bin]]
 name = "DubAssistant"
 path = "src/main.rs"
+
+[[bin]]
+name = "dubassistant-cli"
+path = "src/bin/cli.rs"
 
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
 directories = "5.0"
 eframe = "0.29"
 egui = "0.29"
@@ -25,7 +34,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1 = "0.10"
 thiserror = "2.0"
-tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "time", "fs"] }
+tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "time", "fs", "signal"] }
 url = "2.5"
 
 [target.'cfg(windows)'.build-dependencies]

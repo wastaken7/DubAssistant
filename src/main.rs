@@ -1,17 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod cancel;
-mod capybara;
-mod clients;
-mod config;
-mod domain;
-mod imghost;
-mod media;
-mod tmdb;
-mod torrent;
-mod ui;
-mod worker;
-
 use eframe::egui;
 
 fn load_app_icon() -> Option<egui::IconData> {
@@ -43,6 +31,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "DubAssistant",
         options,
-        Box::new(|cc| Ok(Box::new(ui::app::CapybaraApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(dub_assistant::ui::app::CapybaraApp::new(cc)))),
     )
 }

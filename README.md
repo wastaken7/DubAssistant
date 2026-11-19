@@ -26,6 +26,30 @@ O `DubAssistant` detecta automaticamente as ferramentas no `PATH` (ou você pode
 - **FFmpeg** (`ffmpeg`, `ffprobe`) — usado para `.mp4`, leitura de tags `TMDB` e discos DVD (`dvdvideo`).
 - **eac3to** *(opcional, Windows)* — usado para listar e extrair playlists de discos Blu-ray (`BDMV`).
 
+## Modo 100% CLI (`dubassistant-cli`)
+
+Além da interface gráfica (`DubAssistant`), o projeto inclui o executável de terminal **`dubassistant-cli`** (compartilha o mesmo `config.json` da GUI e suporta cancelamento via `Ctrl+C`):
+
+```bash
+# Ver configuração e ferramentas detectadas
+dubassistant-cli config-info
+
+# Testar sessão/cookies e capturar Announce URL
+dubassistant-cli test-session
+
+# Inspecionar faixas de um vídeo, disco raw (BDMV/VIDEO_TS/.ISO) ou pasta extraída
+dubassistant-cli inspect "Filme.2024.1080p.WEB-DL.mkv"
+
+# Verificar duplicatas no Acervo de Dublagens
+dubassistant-cli dupe-check --title "As Tartarugas Ninja" --codec AC3 --source Blu-ray
+
+# Processar + dupe-check + espectrograma + upload + injeção no cliente (use --dry-run para testar sem enviar)
+dubassistant-cli upload "Filme.2024.1080p.WEB-DL.mkv" --version streaming --studio "Delart" --spectrogram --dry-run
+
+# Blu-ray raw escolhendo playlist e faixa de áudio específica
+dubassistant-cli upload "D:/Blu-ray/Filme" --playlist 1 --audio-track 4 --version cinema
+```
+
 ## Como Compilar Localmente
 
 ```bash
@@ -33,7 +57,7 @@ cargo test
 cargo build --release
 ```
 
-O executável será gerado em `target/release/DubAssistant.exe` (Windows) ou `target/release/DubAssistant` (Linux/macOS).
+Os executáveis serão gerados em `target/release/DubAssistant.exe` (GUI) e `target/release/dubassistant-cli.exe` (CLI) no Windows (ou sem `.exe` no Linux/macOS).
 
 > **Linux**: instale as dependências de desenvolvimento do `egui`/`rfd` antes de compilar:
 > ```bash

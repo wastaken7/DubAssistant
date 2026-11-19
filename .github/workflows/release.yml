@@ -82,21 +82,25 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin_name: DubAssistant.exe
+            cli_bin_name: dubassistant-cli.exe
             artifact_name: windows-x86_64
             archive_ext: zip
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_name: DubAssistant
+            cli_bin_name: dubassistant-cli
             artifact_name: linux-x86_64
             archive_ext: tar.gz
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             bin_name: DubAssistant
+            cli_bin_name: dubassistant-cli
             artifact_name: macos-aarch64
             archive_ext: tar.gz
-          - os: macos-14
+          - os: macos-latest
             target: x86_64-apple-darwin
             bin_name: DubAssistant
+            cli_bin_name: dubassistant-cli
             artifact_name: macos-x86_64
             archive_ext: tar.gz
 
@@ -135,7 +139,7 @@ jobs:
           $outDir = "dist"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $zipPath = "$outDir/DubAssistant-$tag-${{ matrix.artifact_name }}.zip"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin_name }}", "README.md", "LICENSE" -DestinationPath $zipPath
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin_name }}", "target/${{ matrix.target }}/release/${{ matrix.cli_bin_name }}", "README.md", "LICENSE" -DestinationPath $zipPath
 
       - name: Package Unix tar.gz
         if: matrix.archive_ext == 'tar.gz'
@@ -144,6 +148,7 @@ jobs:
           TAG="${{ needs.prepare.outputs.tag }}"
           mkdir -p dist/stage
           cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" dist/stage/
+          cp "target/${{ matrix.target }}/release/${{ matrix.cli_bin_name }}" dist/stage/
           cp README.md LICENSE dist/stage/
           tar -czf "dist/DubAssistant-${TAG}-${{ matrix.artifact_name }}.tar.gz" -C dist/stage .
 
