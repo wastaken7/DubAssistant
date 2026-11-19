@@ -1,0 +1,180 @@
+name: Release Multi-OS
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão do release (ex: 0.2.0 ou v0.2.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Marcar como Pre-release no GitHub"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Bump Version & Create Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.normalize.outputs.version }}
+      tag: ${{ steps.normalize.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate and normalize version
+        id: normalize
+        run: |
+          RAW="${{ inputs.version }}"
+          VER="${RAW#v}"
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+([\-+][0-9A-Za-z\.-]+)?$ ]]; then
+            echo "Versão inválida: '$RAW'. Use formato SemVer (ex: 0.2.0 ou v0.2.0)."
+            exit 1
+          fi
+          TAG="v$VER"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "A tag '$TAG' já existe no repositório."
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Cargo.toml and Cargo.lock
+        run: |
+          VER="${{ steps.normalize.outputs.version }}"
+          sed -i -E "0,/^version = \".*\"/s//version = \"$VER\"/" Cargo.toml
+          cargo generate-lockfile
+
+      - name: Commit version bump and push tag
+        run: |
+          TAG="${{ steps.normalize.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): $TAG"
+            git push origin HEAD
+          fi
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+  build:
+    name: Build (${{ matrix.artifact_name }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_name: DubAssistant.exe
+            artifact_name: windows-x86_64
+            archive_ext: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_name: DubAssistant
+            artifact_name: linux-x86_64
+            archive_ext: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bin_name: DubAssistant
+            artifact_name: macos-aarch64
+            archive_ext: tar.gz
+          - os: macos-14
+            target: x86_64-apple-darwin
+            bin_name: DubAssistant
+            artifact_name: macos-x86_64
+            archive_ext: tar.gz
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev pkg-config
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run unit tests
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Windows zip
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.prepare.outputs.tag }}"
+          $outDir = "dist"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $zipPath = "$outDir/DubAssistant-$tag-${{ matrix.artifact_name }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.bin_name }}", "README.md", "LICENSE" -DestinationPath $zipPath
+
+      - name: Package Unix tar.gz
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          TAG="${{ needs.prepare.outputs.tag }}"
+          mkdir -p dist/stage
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" dist/stage/
+          cp README.md LICENSE dist/stage/
+          tar -czf "dist/DubAssistant-${TAG}-${{ matrix.artifact_name }}.tar.gz" -C dist/stage .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.artifact_name }}
+          path: dist/DubAssistant-*
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        working-directory: release-assets
+        run: sha256sum DubAssistant-* > SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: DubAssistant ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ inputs.prerelease }}
+          files: |
+            release-assets/DubAssistant-*
+            release-assets/SHA256SUMS.txt

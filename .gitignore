@@ -1,0 +1,38 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.pdb
+
+# Dados sensíveis / arquivos de execução
+cookies.txt
+*.cookies
+config.json
+.env
+.env.*
+*.torrent
+*.log
+mediainfo.txt
+
+# Saídas temporárias e mídias de teste
+/output/
+*.mkv
+*.mp4
+*.ac3
+*.eac3
+*.dts
+*.dtshd
+*.thd
+*.flac
+*.wav
+*.aac
+*.sup
+*.srt
+
+# Sistema operacional e IDEs
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
