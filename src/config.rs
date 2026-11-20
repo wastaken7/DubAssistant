@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TorrentClientType {
@@ -270,15 +269,48 @@ pub fn detect_binary(candidates: &[&str]) -> String {
     String::new()
 }
 
+/// Busca um executável diretamente na variável de ambiente `PATH` em Rust puro
+/// (sem spawnar `where.exe`/`which`, evitando piscar janelas de terminal no Windows).
 fn which_in_path(cmd: &str) -> Option<String> {
-    #[cfg(target_os = "windows")]
-    let out = Command::new("where").arg(cmd).output().ok()?;
-    #[cfg(not(target_os = "windows"))]
-    let out = Command::new("which").arg(cmd).output().ok()?;
+    let path_var = std::env::var_os("PATH")?;
 
-    if !out.status.success() {
-        return None;
+    #[cfg(target_os = "windows")]
+    let exts: Vec<String> = {
+        let has_ext = Path::new(cmd).extension().is_some();
+        if has_ext {
+            vec![String::new()]
+        } else {
+            let pathext = std::env::var("PATHEXT")
+                .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string());
+            pathext
+                .split(';')
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_ascii_lowercase())
+                .collect()
+        }
+    };
+
+    for dir in std::env::split_paths(&path_var) {
+        #[cfg(target_os = "windows")]
+        {
+            for ext in &exts {
+                let candidate = if ext.is_empty() {
+                    dir.join(cmd)
+                } else {
+                    dir.join(format!("{cmd}{ext}"))
+                };
+                if candidate.is_file() {
+                    return Some(candidate.to_string_lossy().to_string());
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let candidate = dir.join(cmd);
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    stdout.lines().next().map(|l| l.trim().to_string()).filter(|s| !s.is_empty())
+    None
 }
