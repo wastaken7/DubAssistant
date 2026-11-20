@@ -6,23 +6,24 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const DEFAULT_DURATION_SECS: u32 = 600;
-const SPECTRUM_SIZE: &str = "1920x1080";
-const MAX_SEPARATE_CHANNELS: u32 = 2;
 
-/// Monta o filtro `ffmpeg` idêntico ao Upload-Assistant:
-/// - Mono / Estéreo (<= 2 canais): plota canais separados.
-/// - Surround (> 2 canais): faz downmix para mono antes do `showspectrumpic` para manter legibilidade.
+/// Monta o filtro `ffmpeg` plotando **todos os canais individualmente** (`mode=separate`,
+/// sem downmix para mono) e escalando a altura automaticamente para manter 5.1 / 7.1 legíveis:
+/// - 1.0 / 2.0 -> `1920x1080`
+/// - 5.1 (6 ch) -> `1920x1800` (300px por canal)
+/// - 7.1 (8 ch) -> `1920x2400` (300px por canal)
 pub fn build_spectrogram_filter(channels: u32) -> String {
-    let downmix = if channels > MAX_SEPARATE_CHANNELS {
-        "aformat=channel_layouts=mono,"
+    let height = if channels <= 2 {
+        1080
     } else {
-        ""
+        (channels * 300).clamp(1080, 2400)
     };
-    format!("[0:a:0]{downmix}showspectrumpic=s={SPECTRUM_SIZE}:mode=separate:legend=1[spectrum]")
+    format!("[0:a:0]showspectrumpic=s=1920x{height}:mode=separate:legend=1[spectrum]")
 }
 
 /// Gera o PNG de espectrograma do arquivo de áudio extraído em uma pasta temporária
 /// (fora da pasta do torrent, respeitando a regra de não incluir imagens soltas no torrent).
+/// Se `duration_secs == 0`, analisa o arquivo inteiro; caso contrário limita aos primeiros `duration_secs`.
 pub fn generate_audio_spectrogram(
     cfg: &AppConfig,
     audio_path: &Path,
@@ -34,7 +35,10 @@ pub fn generate_audio_spectrogram(
         bail!("Tarefa cancelada pelo usuário.");
     }
     if !audio_path.is_file() {
-        bail!("Arquivo de áudio não encontrado para gerar espectrograma: {}", audio_path.display());
+        bail!(
+            "Arquivo de áudio não encontrado para gerar espectrograma: {}",
+            audio_path.display()
+        );
     }
     let ffmpeg = cfg.ffmpeg_path.trim();
     if ffmpeg.is_empty() {
@@ -50,17 +54,23 @@ pub fn generate_audio_spectrogram(
     let out_path = out_dir.join(format!("{stem}_spec_{ts}.png"));
 
     let ch_count = parse_channels_count(channels_hint);
-    let dur = if duration_secs == 0 {
-        DEFAULT_DURATION_SECS
-    } else {
-        duration_secs
-    };
     let filter = build_spectrogram_filter(ch_count);
 
     let mut cmd = Command::new(ffmpeg);
-    cmd.args(["-v", "error", "-nostdin", "-y", "-t", &dur.to_string(), "-i"])
+    cmd.args(["-v", "error", "-nostdin", "-y"]);
+    if duration_secs > 0 {
+        cmd.args(["-t", &duration_secs.to_string()]);
+    }
+    cmd.arg("-i")
         .arg(audio_path)
-        .args(["-filter_complex", &filter, "-map", "[spectrum]", "-frames:v", "1"])
+        .args([
+            "-filter_complex",
+            &filter,
+            "-map",
+            "[spectrum]",
+            "-frames:v",
+            "1",
+        ])
         .arg(&out_path);
 
     let output = run_command_cancellable(&mut cmd, cancel)
@@ -98,14 +108,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_spectrogram_filter_stereo_vs_surround() {
+    fn test_spectrogram_filter_separate_channels_scaled() {
         assert_eq!(
             build_spectrogram_filter(2),
             "[0:a:0]showspectrumpic=s=1920x1080:mode=separate:legend=1[spectrum]"
         );
         assert_eq!(
             build_spectrogram_filter(6),
-            "[0:a:0]aformat=channel_layouts=mono,showspectrumpic=s=1920x1080:mode=separate:legend=1[spectrum]"
+            "[0:a:0]showspectrumpic=s=1920x1800:mode=separate:legend=1[spectrum]"
+        );
+        assert_eq!(
+            build_spectrogram_filter(8),
+            "[0:a:0]showspectrumpic=s=1920x2400:mode=separate:legend=1[spectrum]"
         );
     }
 

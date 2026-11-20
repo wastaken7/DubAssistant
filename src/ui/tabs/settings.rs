@@ -244,9 +244,9 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                         &mut ih.auto_generate_spectrogram,
                         "Gerar e hospedar automaticamente ao processar",
                     );
-                    ui.label("Duração (s):");
+                    ui.label("Duração (s, 0 = completo):");
                     ui.add(
-                        egui::DragValue::new(&mut ih.spectrogram_duration_secs).range(30..=3600),
+                        egui::DragValue::new(&mut ih.spectrogram_duration_secs).range(0..=3600),
                     );
                 });
                 ui.end_row();
