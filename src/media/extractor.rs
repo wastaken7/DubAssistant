@@ -1,4 +1,6 @@
-use crate::cancel::{run_command_cancellable, CancelHandle};
+use crate::cancel::{
+    run_command_cancellable, run_command_cancellable_with_stdout, CancelHandle,
+};
 use crate::config::AppConfig;
 use crate::domain::models::{
     AudioCodec, Category, ExtractedFolderScan, InspectedVideo, MediaTrack, PackageOutput,
@@ -49,7 +51,8 @@ where
     let mut delay_warnings = Vec::new();
     let mut first_extracted_audio: Option<PathBuf> = None;
 
-    let total_steps = (videos.len() as f32) + 1.0;
+    let extract_weight = 0.80_f32;
+    let per_video = extract_weight / (videos.len() as f32);
 
     for (idx, video) in videos.iter().enumerate() {
         if cancel.is_cancelled() {
@@ -165,7 +168,16 @@ where
             audio_filename
         ));
 
-        extract_tracks_single_pass(cfg, video, audio_track, &audio_dest, &sub_targets, cancel)?;
+        let video_base = (idx as f32) * per_video;
+        extract_tracks_single_pass(
+            cfg,
+            video,
+            audio_track,
+            &audio_dest,
+            &sub_targets,
+            cancel,
+            |p| on_progress((video_base + p * per_video).clamp(0.0, extract_weight)),
+        )?;
 
         if first_extracted_audio.is_none() {
             first_extracted_audio = Some(audio_dest.clone());
@@ -186,7 +198,7 @@ where
             }
         }
 
-        on_progress(((idx + 1) as f32 / total_steps) * 0.85);
+        on_progress(((idx + 1) as f32 * per_video).min(extract_weight));
     }
 
     if cancel.is_cancelled() {
@@ -213,6 +225,7 @@ where
     } else {
         String::new()
     };
+    on_progress(0.85);
 
     // Criar .torrent privado
     let torrent_path = output_base_dir.join(format!("{safe_root_name}.torrent"));
@@ -382,26 +395,34 @@ where
 }
 
 /// Extrai áudio + todas as legendas selecionadas em UMA ÚNICA LEITURA do arquivo fonte:
-/// - MKV: `mkvextract <file> tracks <audio_id>:<audio_out> <sub1_id>:<sub1_out> ...`
+/// - MKV: `mkvextract <file> --gui-mode tracks <audio_id>:<audio_out> <sub1_id>:<sub1_out> ...`
 /// - MP4 / fallback: `ffmpeg -y -v error -i <file> -map 0:<a_id> -c:a copy <a_out> -map 0:<s1_id> -c:s copy <s1_out> ...`
-fn extract_tracks_single_pass(
+fn extract_tracks_single_pass<FProg>(
     cfg: &AppConfig,
     video: &InspectedVideo,
     audio_track: &MediaTrack,
     audio_dest: &Path,
     sub_targets: &[(&MediaTrack, PathBuf)],
     cancel: &CancelHandle,
-) -> Result<()> {
+    mut on_progress: FProg,
+) -> Result<()>
+where
+    FProg: FnMut(f32),
+{
     if video.is_mkv && !cfg.mkvextract_path.trim().is_empty() {
         let mut cmd = Command::new(cfg.mkvextract_path.trim());
-        cmd.arg(&video.path).arg("tracks");
+        cmd.arg(&video.path).arg("--gui-mode").arg("tracks");
         cmd.arg(format!("{}:{}", audio_track.id, audio_dest.to_string_lossy()));
         for (sub, dest) in sub_targets {
             cmd.arg(format!("{}:{}", sub.id, dest.to_string_lossy()));
         }
 
-        let out = run_command_cancellable(&mut cmd, cancel)
-            .context("Falha ao executar mkvextract")?;
+        let out = run_command_cancellable_with_stdout(&mut cmd, cancel, |line| {
+            if let Some(p) = parse_mkvextract_progress(line) {
+                on_progress(p);
+            }
+        })
+        .context("Falha ao executar mkvextract")?;
         if !out.status.success() {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -489,5 +510,45 @@ fn subtitle_extension(codec_raw: &str) -> &'static str {
         "vtt"
     } else {
         "srt"
+    }
+}
+
+/// Faz parse das linhas de progresso emitidas pelo `mkvextract`:
+/// - Modo GUI (`--gui-mode`): `#GUI#progress 42%`
+/// - Modo padrão (localizado): `Progress: 42%` / `Progresso: 42%`
+fn parse_mkvextract_progress(line: &str) -> Option<f32> {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("#GUI#progress") {
+        let pct_str = rest.trim().strip_suffix('%')?.trim();
+        let pct: f32 = pct_str.parse().ok()?;
+        return Some((pct / 100.0).clamp(0.0, 1.0));
+    }
+    if let Some(colon_idx) = trimmed.find(':') {
+        let label = trimmed[..colon_idx].trim().to_ascii_lowercase();
+        if label.contains("progress") {
+            let pct_str = trimmed[colon_idx + 1..].trim().strip_suffix('%')?.trim();
+            let pct: f32 = pct_str.parse().ok()?;
+            return Some((pct / 100.0).clamp(0.0, 1.0));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_mkvextract_progress;
+
+    #[test]
+    fn parses_gui_mode_progress() {
+        assert_eq!(parse_mkvextract_progress("#GUI#progress 0%"), Some(0.0));
+        assert_eq!(parse_mkvextract_progress("#GUI#progress 42%"), Some(0.42));
+        assert_eq!(parse_mkvextract_progress("  #GUI#progress 100%  "), Some(1.0));
+    }
+
+    #[test]
+    fn parses_localized_progress_fallback() {
+        assert_eq!(parse_mkvextract_progress("Progress: 25%"), Some(0.25));
+        assert_eq!(parse_mkvextract_progress("Progresso: 73%"), Some(0.73));
+        assert_eq!(parse_mkvextract_progress("Extracting track 1"), None);
     }
 }

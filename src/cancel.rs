@@ -84,6 +84,19 @@ fn kill_process_tree(pid: u32) {
 /// Executa um comando externo de forma cancelável, lendo stdout/stderr sem deadlock
 /// e encerrando o processo imediatamente se `cancel` for acionado.
 pub fn run_command_cancellable(cmd: &mut Command, cancel: &CancelHandle) -> Result<Output> {
+    run_command_cancellable_with_stdout(cmd, cancel, |_| {})
+}
+
+/// Executa um comando externo de forma cancelável, notificando `on_stdout_line` a cada
+/// linha/trecho separado por `\n` ou `\r` emitido em stdout em tempo real.
+pub fn run_command_cancellable_with_stdout<F>(
+    cmd: &mut Command,
+    cancel: &CancelHandle,
+    mut on_stdout_line: F,
+) -> Result<Output>
+where
+    F: FnMut(&str),
+{
     if cancel.is_cancelled() {
         bail!("Tarefa cancelada pelo usuário.");
     }
@@ -97,13 +110,39 @@ pub fn run_command_cancellable(cmd: &mut Command, cancel: &CancelHandle) -> Resu
 
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
 
     let out_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
+        let mut full_buf = Vec::new();
+        let mut pending = Vec::new();
+        let mut chunk = [0u8; 1024];
+
         if let Some(ref mut s) = stdout_pipe {
-            let _ = s.read_to_end(&mut buf);
+            while let Ok(n) = s.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                let slice = &chunk[..n];
+                full_buf.extend_from_slice(slice);
+
+                for &b in slice {
+                    if b == b'\n' || b == b'\r' {
+                        if !pending.is_empty() {
+                            let line = String::from_utf8_lossy(&pending).into_owned();
+                            let _ = line_tx.send(line);
+                            pending.clear();
+                        }
+                    } else {
+                        pending.push(b);
+                    }
+                }
+            }
+            if !pending.is_empty() {
+                let line = String::from_utf8_lossy(&pending).into_owned();
+                let _ = line_tx.send(line);
+            }
         }
-        buf
+        full_buf
     });
     let err_thread = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -123,6 +162,10 @@ pub fn run_command_cancellable(cmd: &mut Command, cancel: &CancelHandle) -> Resu
             bail!("Tarefa cancelada pelo usuário.");
         }
 
+        while let Ok(line) = line_rx.try_recv() {
+            on_stdout_line(&line);
+        }
+
         match child.try_wait()? {
             Some(st) => break st,
             None => std::thread::sleep(Duration::from_millis(50)),
@@ -132,6 +175,9 @@ pub fn run_command_cancellable(cmd: &mut Command, cancel: &CancelHandle) -> Resu
     cancel.set_pid(None);
     let stdout = out_thread.join().unwrap_or_default();
     let stderr = err_thread.join().unwrap_or_default();
+    while let Ok(line) = line_rx.try_recv() {
+        on_stdout_line(&line);
+    }
 
     Ok(Output {
         status,
