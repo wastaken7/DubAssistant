@@ -1,5 +1,5 @@
 use crate::cancel::CancelHandle;
-use crate::capybara::client::{CapybaraClient, DupeEntry, SessionInfo, UploadResult};
+use crate::capybara::client::{CapybaraClient, DupeEntry, UploadResult};
 use crate::clients::{inject_torrent, test_connection};
 use crate::config::{AppConfig, TorrentClientConfig};
 use crate::domain::models::{
@@ -63,9 +63,6 @@ pub enum WorkerCommand {
         audio_path: PathBuf,
         channels_hint: String,
     },
-    TestCapybaraSession {
-        cfg: AppConfig,
-    },
     TestCapybaraApiKey {
         cfg: AppConfig,
     },
@@ -108,7 +105,6 @@ pub enum WorkerEvent {
     TmdbDetailsLoaded(Result<TmdbDetails, String>),
     PackageFinished(Result<PackageOutput, String>),
     SpectrogramFinished(Result<UploadedImage, String>),
-    SessionTested(Result<SessionInfo, String>),
     ApiKeyTested(Result<String, String>),
     DupesChecked(Result<Vec<DupeEntry>, String>),
     TorrentClientTested(Result<String, String>),
@@ -320,13 +316,6 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                     });
                     let _ = tx.send(WorkerEvent::SpectrogramFinished(res));
                 }
-                WorkerCommand::TestCapybaraSession { cfg } => {
-                    let res = run_async_cancellable(&rt, &cancel, async move {
-                        let client = CapybaraClient::from_config(&cfg)?;
-                        client.test_session().await
-                    });
-                    let _ = tx.send(WorkerEvent::SessionTested(res));
-                }
                 WorkerCommand::TestCapybaraApiKey { cfg } => {
                     let res = run_async_cancellable(&rt, &cancel, async move {
                         let client = CapybaraClient::from_config(&cfg)?;
@@ -345,7 +334,7 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                     let res = run_async_cancellable(&rt, &cancel, async move {
                         let client = CapybaraClient::from_config(&cfg)?;
                         client
-                            .check_dupes(
+                            .check_pending_dupes(
                                 &title_pt_br,
                                 &title_original,
                                 &tmdb_id,
@@ -372,14 +361,10 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                     let tx_log = tx.clone();
                     let res = run_async_cancellable(&rt, &cancel, async move {
                         let client = CapybaraClient::from_config(&cfg)?;
-                        let endpoint_desc = if client.has_api_key() {
-                            "POST https://capybarabr.com/api/dubs/upload (API Key)"
-                        } else {
-                            "POST https://capybarabr.com/dublagens (Cookies)"
-                        };
-                        let _ = tx_log.send(WorkerEvent::Log(format!(
-                            "Enviando dublagem via {endpoint_desc}..."
-                        )));
+                        let _ = tx_log.send(WorkerEvent::Log(
+                            "Enviando dublagem via POST https://capybarabr.com/api/dubs/upload..."
+                                .to_string(),
+                        ));
                         let upload = client.upload_dublagem(&meta, &torrent_path).await?;
                         let _ = tx_log.send(WorkerEvent::Log(upload.message.clone()));
 

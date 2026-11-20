@@ -5,12 +5,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CookieSource {
-    NetscapeFile,
-    RawHeader,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TorrentClientType {
     None,
     QBittorrent,
@@ -144,10 +138,6 @@ impl Default for ImageHostConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
-    pub cookie_source: CookieSource,
-    pub cookies_file_path: String,
-    pub raw_cookie_header: String,
-    pub user_agent: String,
     pub capybara_api_key: String,
     pub announce_url: String,
     pub tmdb_api_key: String,
@@ -167,10 +157,6 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            cookie_source: CookieSource::NetscapeFile,
-            cookies_file_path: String::new(),
-            raw_cookie_header: String::new(),
-            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string(),
             capybara_api_key: String::new(),
             announce_url: String::new(),
             tmdb_api_key: String::new(),

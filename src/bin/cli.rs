@@ -4,8 +4,7 @@ use dub_assistant::cancel::CancelHandle;
 use dub_assistant::capybara::client::CapybaraClient;
 use dub_assistant::clients::{inject_torrent, test_connection};
 use dub_assistant::config::{
-    config_file_path, load_config, save_config, AppConfig, CookieSource, ImageHostType,
-    TorrentClientType,
+    config_file_path, load_config, save_config, AppConfig, ImageHostType, TorrentClientType,
 };
 use dub_assistant::domain::models::{
     AudioCodec, Category, DiscKind, DubVersion, SourceType, TrackKind, UploadMetadata,
@@ -38,13 +37,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Testa os cookies no CapybaraBR e captura/salva automaticamente a Announce URL
-    TestSession {
-        /// Usa um arquivo cookies.txt específico apenas para este teste
-        #[arg(long)]
-        cookies: Option<PathBuf>,
-    },
-    /// Testa a API Key do CapybaraBR (sem precisar de cookies)
+    /// Testa a API Key do CapybaraBR
     TestApi {
         /// API Key específica apenas para este teste
         #[arg(long)]
@@ -54,7 +47,7 @@ enum Commands {
     TestClient,
     /// Mostra o caminho do config.json e o status das ferramentas detectadas
     ConfigInfo,
-    /// Configura cookies, API keys, TMDB, host de imagens e cliente BitTorrent direto pelo terminal
+    /// Configura API Key, Announce URL, TMDB, host de imagens e cliente BitTorrent direto pelo terminal
     ConfigSet(ConfigSetArgs),
     /// Inspeciona um vídeo (.mkv/.mp4), pasta de temporada, disco raw (BDMV/VIDEO_TS/.ISO) ou pasta extraída
     Inspect {
@@ -208,13 +201,7 @@ impl From<CliTorrentClient> for TorrentClientType {
 
 #[derive(Args, Debug)]
 struct ConfigSetArgs {
-    /// Caminho do arquivo cookies.txt (Netscape)
-    #[arg(long)]
-    cookies: Option<PathBuf>,
-    /// User-Agent do navegador (compatibilidade Cloudflare)
-    #[arg(long)]
-    user_agent: Option<String>,
-    /// API Key do CapybaraBR (para download do .torrent pós-upload)
+    /// API Key do CapybaraBR (para upload via /api/dubs/upload e download do .torrent)
     #[arg(long)]
     capybara_api_key: Option<String>,
     /// Announce URL pessoal do CapybaraBR
@@ -433,10 +420,6 @@ struct UploadArgs {
     #[arg(long, conflicts_with = "anon")]
     no_anon: bool,
 
-    /// Arquivo cookies.txt específico para esta execução
-    #[arg(long)]
-    cookies: Option<PathBuf>,
-
     /// API Key do CapybaraBR específica para esta execução
     #[arg(long)]
     api_key: Option<String>,
@@ -625,24 +608,6 @@ async fn main() -> Result<()> {
             println!("Configurações salvas em {}", config_file_path()?.display());
             Ok(())
         }
-        Commands::TestSession { cookies } => {
-            if let Some(p) = cookies {
-                cfg.cookie_source = CookieSource::NetscapeFile;
-                cfg.cookies_file_path = p.to_string_lossy().to_string();
-            }
-            let client = CapybaraClient::from_config(&cfg)?;
-            let info = client.test_session().await?;
-            println!(
-                "Sessão autenticada com sucesso! Usuário: {}",
-                info.username_hint.as_deref().unwrap_or("(detectado)")
-            );
-            if let Some(ann) = info.announce_url {
-                println!("Announce URL capturada e salva no config.json.");
-                cfg.announce_url = ann;
-                save_config(&cfg)?;
-            }
-            Ok(())
-        }
         Commands::TestApi { api_key } => {
             if let Some(k) = api_key {
                 cfg.capybara_api_key = k;
@@ -670,7 +635,7 @@ async fn main() -> Result<()> {
         } => {
             let client = CapybaraClient::from_config(&cfg)?;
             let dupes = client
-                .check_dupes(&title, &original, &tmdb, &codec, &source)
+                .check_pending_dupes(&title, &original, &tmdb, &codec, &source)
                 .await?;
             if dupes.is_empty() {
                 println!("Nenhuma dublagem existente encontrada no Acervo.");
@@ -692,13 +657,6 @@ async fn main() -> Result<()> {
 }
 
 fn apply_config_set(cfg: &mut AppConfig, a: ConfigSetArgs) -> Result<()> {
-    if let Some(p) = a.cookies {
-        cfg.cookie_source = CookieSource::NetscapeFile;
-        cfg.cookies_file_path = p.to_string_lossy().to_string();
-    }
-    if let Some(ua) = a.user_agent {
-        cfg.user_agent = ua;
-    }
     if let Some(k) = a.capybara_api_key {
         cfg.capybara_api_key = k;
     }
@@ -892,10 +850,6 @@ fn run_inspect(
 
 async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle) -> Result<()> {
     // Aplica overrides temporários de config para esta execução
-    if let Some(p) = &args.cookies {
-        cfg.cookie_source = CookieSource::NetscapeFile;
-        cfg.cookies_file_path = p.to_string_lossy().to_string();
-    }
     if let Some(k) = &args.api_key {
         cfg.capybara_api_key = k.clone();
     }
@@ -1231,30 +1185,18 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
     };
     println!("  -> Nome oficial: {}", meta.release_name);
 
-    // 3. Sessão CapybaraBR + Announce URL + Dupe Check
-    let capy_client =
-        if !args.dry_run || !args.skip_dupe_check || cfg.announce_url.trim().is_empty() {
-            Some(CapybaraClient::from_config(cfg)?)
-        } else {
-            None
-        };
-
-    if cfg.announce_url.trim().is_empty() {
-        if let Some(client) = &capy_client {
-            println!("[3/5] Capturando Announce URL do CapybaraBR...");
-            let sess = client.test_session().await?;
-            if let Some(ann) = sess.announce_url {
-                cfg.announce_url = ann;
-                let _ = save_config(cfg);
-            }
-        }
-    }
+    // 3. Cliente CapybaraBR + Dupe Check de pendentes (a API também recusa dupes no envio via HTTP 422)
+    let capy_client = if !args.dry_run || !args.skip_dupe_check {
+        Some(CapybaraClient::from_config(cfg)?)
+    } else {
+        None
+    };
 
     if !args.skip_dupe_check {
         if let Some(client) = &capy_client {
-            println!("[3/5] Verificando duplicatas no Acervo de Dublagens...");
+            println!("[3/5] Verificando pendentes via API...");
             match client
-                .check_dupes(
+                .check_pending_dupes(
                     &meta.title_pt_br,
                     &meta.title_original,
                     &meta.tmdb_id,
@@ -1390,11 +1332,7 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
 
     // 5. Upload + Download via API + Injeção no Cliente BitTorrent
     let client = capy_client.unwrap_or(CapybaraClient::from_config(cfg)?);
-    if client.has_api_key() {
-        println!("[5/5] Enviando via API oficial (POST /api/dubs/upload)...");
-    } else {
-        println!("[5/5] Enviando via formulário web (POST /dublagens)...");
-    }
+    println!("[5/5] Enviando via API oficial (POST /api/dubs/upload)...");
     let upload = client.upload_dublagem(&meta, &pkg.torrent_path).await?;
     println!("  {}", upload.message);
     println!("  URL: {}", upload.final_url);
@@ -1523,8 +1461,10 @@ mod tests {
         let cli = Cli::try_parse_from([
             "dubassistant-cli",
             "config-set",
-            "--cookies",
-            "cookies.txt",
+            "--capybara-api-key",
+            "cbr_key",
+            "--announce",
+            "https://capybarabr.com/announce/dummy",
             "--tmdb-api-key",
             "abc123",
             "--client",

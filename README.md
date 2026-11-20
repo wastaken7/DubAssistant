@@ -12,9 +12,9 @@ Aplicativo desktop nativo para facilitar a extração lossless, padronização d
   - Detecta automaticamente tags `TMDB` embutidas no MKV (ex: `movie/1368337`, `tv/66732`).
   - Exibe pôster, títulos PT-BR/original, ano, nota, gêneros, duração/temporadas e sinopse.
   - Preenche automaticamente o padrão oficial de nomenclatura e detecta a Fonte (`Blu-ray`, `WEB-DL`, `DVD`, `TV / VHS`) pelo título/codec.
-- **Upload & Injeção Pós-Upload**:
-  - Autenticação via `cookies.txt` (Netscape) ou header `Cookie` + extração automática de `_token` CSRF e `announce` URL.
-  - Download do `.torrent` corrigido via **API Key** do site (`Authorization: Bearer`) com validação Bencode/InfoHash.
+- **Upload 100% via API Oficial & Injeção Pós-Upload**:
+  - Envio direto via `POST https://capybarabr.com/api/dubs/upload` usando apenas **API Key** (`Authorization: Bearer`, sem necessidade de cookies nem CSRF), com bloqueio nativo de duplicatas pelo servidor (`HTTP 422`).
+  - Download automático do `.torrent` corrigido via `download_link` da resposta da API com validação Bencode/InfoHash.
   - Injeção automática em **qBittorrent** (WebUI direto ou proxy `qui`), **Transmission**, **Deluge** e **Watch Folder** com mapeamento de caminhos e delay configurável.
 
 ## Ferramentas Externas Recomendadas
@@ -34,8 +34,11 @@ Além da interface gráfica (`DubAssistant`), o projeto inclui o executável de 
 # Ver configuração e ferramentas detectadas
 dubassistant-cli config-info
 
-# Testar sessão/cookies e capturar Announce URL
-dubassistant-cli test-session
+# Testar API Key do CapybaraBR
+dubassistant-cli test-api
+
+# Configurar API Key, Announce URL e TMDB pelo terminal
+dubassistant-cli config-set --capybara-api-key "SUA_CHAVE" --announce "https://capybarabr.com/announce/SEU_PASSKEY" --tmdb-api-key "SUA_CHAVE_TMDB"
 
 # Inspecionar faixas de um vídeo, disco raw (BDMV/VIDEO_TS/.ISO) ou pasta extraída
 dubassistant-cli inspect "Filme.2024.1080p.WEB-DL.mkv"

@@ -1,4 +1,4 @@
-use crate::config::{save_config, AppConfig, CookieSource, ImageHostType, TorrentClientType};
+use crate::config::{save_config, AppConfig, ImageHostType, TorrentClientType};
 use crate::ui::app::CapybaraApp;
 use crate::worker::WorkerCommand;
 use eframe::egui;
@@ -7,69 +7,23 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
     ui.heading("Configurações");
     ui.add_space(6.0);
 
-    // 1. Autenticação CapybaraBR
+    // 1. Autenticação CapybaraBR (100% API Oficial)
     egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.label(egui::RichText::new("CapybaraBR — Cookies & API Key").strong());
-        ui.horizontal(|ui| {
-            ui.radio_value(
-                &mut app.config.cookie_source,
-                CookieSource::NetscapeFile,
-                "Arquivo cookies.txt (Netscape)",
-            );
-            ui.radio_value(
-                &mut app.config.cookie_source,
-                CookieSource::RawHeader,
-                "Colar Header Cookie",
-            );
-        });
-
-        match app.config.cookie_source {
-            CookieSource::NetscapeFile => {
-                ui.horizontal(|ui| {
-                    ui.label("Caminho cookies.txt:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut app.config.cookies_file_path)
-                            .desired_width(420.0),
-                    );
-                    if ui.button("Procurar...").clicked() {
-                        if let Some(file) = rfd::FileDialog::new()
-                            .add_filter("Cookies", &["txt"])
-                            .pick_file()
-                        {
-                            app.config.cookies_file_path = file.to_string_lossy().to_string();
-                        }
-                    }
-                });
-            }
-            CookieSource::RawHeader => {
-                ui.label("Cole o valor do header Cookie (DevTools -> Network -> Request Headers):");
-                ui.add(
-                    egui::TextEdit::multiline(&mut app.config.raw_cookie_header)
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY),
-                );
-            }
-        }
-
+        ui.label(egui::RichText::new("CapybaraBR — API Oficial").strong());
         egui::Grid::new("capy_cfg_grid")
             .num_columns(2)
             .spacing([10.0, 6.0])
             .show(ui, |ui| {
-                ui.label("User-Agent (igual ao Chrome):");
-                ui.add(
-                    egui::TextEdit::singleline(&mut app.config.user_agent).desired_width(500.0),
-                );
-                ui.end_row();
-
-                ui.label("CapybaraBR API Key (recomendado — /api/dubs/upload):");
+                ui.label("CapybaraBR API Key:");
                 ui.add(
                     egui::TextEdit::singleline(&mut app.config.capybara_api_key)
                         .password(true)
-                        .desired_width(360.0),
+                        .desired_width(420.0)
+                        .hint_text("Configurações -> Chaves de API no site"),
                 );
                 ui.end_row();
 
-                ui.label("Announce URL (auto ao testar cookies ou cole manual):");
+                ui.label("Announce URL:");
                 ui.add(
                     egui::TextEdit::singleline(&mut app.config.announce_url)
                         .desired_width(500.0)
@@ -86,16 +40,6 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                 let _ = save_config(&app.config);
                 app.busy = true;
                 let _ = app.worker.tx.send(WorkerCommand::TestCapybaraApiKey {
-                    cfg: app.config.clone(),
-                });
-            }
-            if ui
-                .add_enabled(!app.busy, egui::Button::new("Testar Cookies & Capturar Announce"))
-                .clicked()
-            {
-                let _ = save_config(&app.config);
-                app.busy = true;
-                let _ = app.worker.tx.send(WorkerCommand::TestCapybaraSession {
                     cfg: app.config.clone(),
                 });
             }

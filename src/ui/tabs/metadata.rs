@@ -153,14 +153,14 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
 
     ui.add_space(10.0);
 
-    // Painel de Dupe Check no Acervo de Dublagens
+    // Painel de Dupe Check (Pendentes via API; duplicatas no acervo também são recusadas automaticamente pela API)
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Dupe Check (Acervo de Dublagens)").strong());
+            ui.label(egui::RichText::new("Dupe Check (Pendentes via API)").strong());
             if ui
                 .add_enabled(
                     !app.busy,
-                    egui::Button::new("Verificar Duplicatas no CapybaraBR"),
+                    egui::Button::new("Verificar Pendentes"),
                 )
                 .clicked()
             {
@@ -171,13 +171,13 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
             None => {
                 ui.colored_label(
                     egui::Color32::GRAY,
-                    "Ainda não verificado (roda automaticamente ao carregar um título do TMDB).",
+                    "A API recusa duplicatas automaticamente no envio; clique acima para checar pendentes.",
                 );
             }
             Some(Ok(list)) if list.is_empty() => {
                 ui.colored_label(
                     egui::Color32::from_rgb(80, 200, 120),
-                    "✔ Nenhuma dublagem encontrada no Acervo para este título.",
+                    "✔ Nenhuma dublagem pendente encontrada para este título.",
                 );
             }
             Some(Ok(list)) => {

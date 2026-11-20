@@ -1,7 +1,6 @@
 use crate::cancel::CancelHandle;
 use crate::capybara::client::DupeEntry;
-use crate::capybara::cookies::load_cookie_header;
-use crate::config::{load_config, save_config, AppConfig};
+use crate::config::{load_config, AppConfig};
 use crate::domain::models::{
     Category, DiscKind, ExtractedFolderScan, InputMode, InspectedDisc, InspectedVideo,
     PackageOutput, SourceType, TrackKind, UploadMetadata,
@@ -389,9 +388,7 @@ impl CapybaraApp {
                                     self.meta.tmdb_id, self.meta.title_pt_br, self.meta.year
                                 ),
                             ));
-                            if load_cookie_header(&self.config).is_ok()
-                                || !self.config.capybara_api_key.trim().is_empty()
-                            {
+                            if !self.config.capybara_api_key.trim().is_empty() {
                                 self.trigger_dupe_check();
                             }
                         }
@@ -473,37 +470,6 @@ impl CapybaraApp {
                         }
                         Err(e) => {
                             self.push_log(format!("[ERRO ESPECTROGRAMA] {e}"));
-                            self.status_banner = Some((false, e));
-                        }
-                    }
-                }
-                WorkerEvent::SessionTested(res) => {
-                    self.busy = false;
-                    match res {
-                        Ok(info) => {
-                            if let Some(ann) = &info.announce_url {
-                                self.config.announce_url = ann.clone();
-                                let _ = save_config(&self.config);
-                            }
-                            let who = info
-                                .username_hint
-                                .clone()
-                                .unwrap_or_else(|| "autenticado".into());
-                            let msg = format!(
-                                "Sessão OK ({who}) — CSRF obtido{}",
-                                if info.announce_url.is_some() {
-                                    " + Announce URL capturada!"
-                                } else {
-                                    ""
-                                }
-                            );
-                            self.push_log(msg.clone());
-                            self.session_status = Some(Ok(msg.clone()));
-                            self.status_banner = Some((true, msg));
-                        }
-                        Err(e) => {
-                            self.push_log(format!("[ERRO SESSÃO] {e}"));
-                            self.session_status = Some(Err(e.clone()));
                             self.status_banner = Some((false, e));
                         }
                     }
@@ -629,9 +595,11 @@ impl eframe::App for CapybaraApp {
                         ui.spinner();
                         ui.label("Processando...");
                     } else if let Some(Ok(_)) = &self.session_status {
-                        ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "Sessão OK");
+                        ui.colored_label(egui::Color32::from_rgb(80, 200, 120), "API OK");
+                    } else if !self.config.capybara_api_key.trim().is_empty() {
+                        ui.colored_label(egui::Color32::GRAY, "API configurada");
                     } else {
-                        ui.colored_label(egui::Color32::GRAY, "Sessão não testada");
+                        ui.colored_label(egui::Color32::from_rgb(240, 190, 80), "API Key ausente");
                     }
                 });
             });

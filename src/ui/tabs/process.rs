@@ -32,7 +32,7 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.colored_label(
             egui::Color32::from_rgb(240, 190, 80),
-            "Aviso: URL de announce ainda não preenchida. Vá em Configurações e clique em 'Testar Sessão' para capturá-la automaticamente (ou cole manualmente).",
+            "Aviso: URL de announce ainda não preenchida. Informe sua Announce URL pessoal na aba Configurações.",
         );
     }
 
