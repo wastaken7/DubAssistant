@@ -28,9 +28,17 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
+    let initial_paths: Vec<std::path::PathBuf> =
+        std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
+
     eframe::run_native(
         "DubAssistant",
         options,
-        Box::new(|cc| Ok(Box::new(dub_assistant::ui::app::CapybaraApp::new(cc)))),
+        Box::new(move |cc| {
+            Ok(Box::new(dub_assistant::ui::app::CapybaraApp::new(
+                cc,
+                initial_paths,
+            )))
+        }),
     )
 }

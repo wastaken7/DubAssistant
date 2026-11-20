@@ -1,5 +1,2 @@
-pub mod input;
-pub mod metadata;
-pub mod process;
+pub mod main_view;
 pub mod settings;
-pub mod upload;
