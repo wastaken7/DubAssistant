@@ -76,6 +76,17 @@ enum Commands {
         #[arg(long, default_value = "")]
         source: String,
     },
+    /// Gera espectrograma em streaming (< 50 MB RAM) de um arquivo de áudio e opcionalmente faz upload
+    Spectrogram {
+        /// Arquivo de áudio (.ac3, .eac3, .dts, .dtshd, .thd, .flac, .wav, .aac)
+        audio: PathBuf,
+        /// Duração em segundos (0 = arquivo inteiro)
+        #[arg(long, default_value_t = 0)]
+        duration: u32,
+        /// Também envia o PNG gerado para o host de imagens configurado
+        #[arg(long)]
+        upload: bool,
+    },
     /// Processa, empacota (.torrent privado), faz upload para o CapybaraBR e injeta no cliente BitTorrent
     Upload(UploadArgs),
 }
@@ -649,6 +660,20 @@ async fn main() -> Result<()> {
                     };
                     println!("  {tag} {} {}", d.title, d.url.as_deref().unwrap_or(""));
                 }
+            }
+            Ok(())
+        }
+        Commands::Spectrogram {
+            audio,
+            duration,
+            upload,
+        } => {
+            let png = generate_audio_spectrogram(&cfg, &audio, "", duration, &cancel)?;
+            println!("Espectrograma gerado: {}", png.display());
+            if upload {
+                let res = upload_image(&png, &cfg.image_host).await?;
+                println!("Hospedado em {}: {}", res.host_name, res.raw_url);
+                println!("BBCode:\n{}", res.to_bbcode());
             }
             Ok(())
         }

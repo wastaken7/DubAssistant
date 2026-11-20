@@ -129,7 +129,7 @@ impl Default for ImageHostConfig {
             api_key: String::new(),
             custom_url: String::new(),
             auto_generate_spectrogram: false,
-            spectrogram_duration_secs: 600,
+            spectrogram_duration_secs: 0,
         }
     }
 }
