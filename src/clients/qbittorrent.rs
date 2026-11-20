@@ -1,15 +1,49 @@
 use crate::config::TorrentClientConfig;
 use anyhow::{bail, Context, Result};
-use reqwest::{multipart, Client};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::{multipart, Client, StatusCode};
 use serde_json::Value;
 use std::time::Duration;
 
-fn build_http(allow_invalid_certs: bool) -> Result<Client> {
-    Ok(Client::builder()
+fn normalized_api_key(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let stripped = if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+        trimmed[7..].trim()
+    } else {
+        trimmed
+    };
+    if stripped.is_empty() {
+        None
+    } else {
+        Some(stripped)
+    }
+}
+
+fn uses_api_key(cfg: &TorrentClientConfig) -> bool {
+    cfg.qui_proxy_url.trim().is_empty() && normalized_api_key(&cfg.api_key).is_some()
+}
+
+fn build_http(cfg: &TorrentClientConfig) -> Result<Client> {
+    let mut builder = Client::builder()
         .cookie_store(true)
-        .danger_accept_invalid_certs(allow_invalid_certs)
-        .timeout(Duration::from_secs(30))
-        .build()?)
+        .danger_accept_invalid_certs(cfg.allow_invalid_certs)
+        .timeout(Duration::from_secs(30));
+
+    if cfg.qui_proxy_url.trim().is_empty() {
+        if let Some(key) = normalized_api_key(&cfg.api_key) {
+            let mut headers = HeaderMap::new();
+            let val = HeaderValue::from_str(&format!("Bearer {key}")).context(
+                "API Key do qBittorrent contém caracteres inválidos para cabeçalho HTTP",
+            )?;
+            headers.insert(AUTHORIZATION, val);
+            builder = builder.default_headers(headers);
+        }
+    }
+
+    Ok(builder.build()?)
 }
 
 fn base_url(cfg: &TorrentClientConfig) -> String {
@@ -37,8 +71,16 @@ fn has_explicit_port(url_str: &str) -> bool {
         .is_some()
 }
 
+fn is_login_response_ok(status: reqwest::StatusCode, body: &str) -> bool {
+    if status == reqwest::StatusCode::NO_CONTENT {
+        return true;
+    }
+    let trimmed = body.trim();
+    status.is_success() && (trimmed == "Ok." || trimmed.is_empty())
+}
+
 async fn login_if_direct(client: &Client, base: &str, cfg: &TorrentClientConfig) -> Result<()> {
-    if !cfg.qui_proxy_url.trim().is_empty() {
+    if !cfg.qui_proxy_url.trim().is_empty() || uses_api_key(cfg) {
         return Ok(());
     }
     if cfg.username.trim().is_empty() && cfg.password.is_empty() {
@@ -56,14 +98,14 @@ async fn login_if_direct(client: &Client, base: &str, cfg: &TorrentClientConfig)
 
     let status = resp.status();
     let body = resp.text().await?;
-    if !status.is_success() || body.trim() != "Ok." {
-        bail!("Login no qBittorrent falhou (HTTP {status}): {body}");
+    if !is_login_response_ok(status, &body) {
+        bail!("Login no qBittorrent falhou (HTTP {status}): {}", body.trim());
     }
     Ok(())
 }
 
 pub async fn test_connection(cfg: &TorrentClientConfig) -> Result<String> {
-    let client = build_http(cfg.allow_invalid_certs)?;
+    let client = build_http(cfg)?;
     let base = base_url(cfg);
     login_if_direct(&client, &base, cfg).await?;
 
@@ -73,13 +115,23 @@ pub async fn test_connection(cfg: &TorrentClientConfig) -> Result<String> {
         .await
         .context("Falha ao consultar versão do qBittorrent")?;
     if !resp.status().is_success() {
-        bail!("qBittorrent retornou HTTP {}", resp.status());
+        let status = resp.status();
+        if uses_api_key(cfg)
+            && (status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN)
+        {
+            bail!(
+                "Autenticação por API Key no qBittorrent falhou (HTTP {status}). Verifique a chave nas configurações da WebUI."
+            );
+        }
+        bail!("qBittorrent retornou HTTP {status}");
     }
     let version = resp.text().await?;
-    let via = if cfg.qui_proxy_url.trim().is_empty() {
-        "WebUI direto"
-    } else {
+    let via = if !cfg.qui_proxy_url.trim().is_empty() {
         "proxy qui"
+    } else if uses_api_key(cfg) {
+        "API Key"
+    } else {
+        "WebUI direto"
     };
     Ok(format!("Conectado ao qBittorrent {version} ({via})"))
 }
@@ -91,7 +143,7 @@ pub async fn add_torrent(
     save_path: &str,
     cfg: &TorrentClientConfig,
 ) -> Result<String> {
-    let client = build_http(cfg.allow_invalid_certs)?;
+    let client = build_http(cfg)?;
     let base = base_url(cfg);
     login_if_direct(&client, &base, cfg).await?;
 
@@ -161,4 +213,58 @@ pub async fn add_torrent(
     Ok(format!(
         "Injetado no qBittorrent com sucesso (savepath: {save_path})"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn login_response_accepts_legacy_200_ok_and_v53_204() {
+        assert!(is_login_response_ok(StatusCode::OK, "Ok."));
+        assert!(is_login_response_ok(StatusCode::OK, "Ok.\n"));
+        assert!(is_login_response_ok(StatusCode::NO_CONTENT, ""));
+        assert!(is_login_response_ok(StatusCode::OK, ""));
+    }
+
+    #[test]
+    fn login_response_rejects_failures() {
+        assert!(!is_login_response_ok(StatusCode::OK, "Fails."));
+        assert!(!is_login_response_ok(StatusCode::UNAUTHORIZED, "Unauthorized"));
+        assert!(!is_login_response_ok(StatusCode::FORBIDDEN, "Banned"));
+    }
+
+    #[test]
+    fn api_key_normalization() {
+        assert_eq!(normalized_api_key(""), None);
+        assert_eq!(normalized_api_key("   "), None);
+        assert_eq!(normalized_api_key("Bearer   "), None);
+        assert_eq!(
+            normalized_api_key("qbt_1234567890abcdef1234567890ab"),
+            Some("qbt_1234567890abcdef1234567890ab")
+        );
+        assert_eq!(
+            normalized_api_key("  Bearer qbt_1234567890abcdef1234567890ab  "),
+            Some("qbt_1234567890abcdef1234567890ab")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_test_connection_from_env() {
+        let mut cfg = TorrentClientConfig::default();
+        cfg.url = std::env::var("QBT_TEST_URL").unwrap_or_else(|_| "http://localhost".into());
+        cfg.port = std::env::var("QBT_TEST_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8080);
+        cfg.username = std::env::var("QBT_TEST_USER").unwrap_or_else(|_| "admin".into());
+        cfg.password = std::env::var("QBT_TEST_PASS").unwrap_or_default();
+        cfg.api_key = std::env::var("QBT_TEST_API_KEY").unwrap_or_default();
+
+        let msg = test_connection(&cfg).await.expect("test_connection deve suceder");
+        println!("{msg}");
+        assert!(msg.contains("Conectado ao qBittorrent"));
+    }
 }

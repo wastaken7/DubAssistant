@@ -110,6 +110,15 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                     ui.end_row();
 
                     if tc.client_type == TorrentClientType::QBittorrent {
+                        ui.label("API Key (qBittorrent 5.2+):");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut tc.api_key)
+                                .password(true)
+                                .desired_width(360.0)
+                                .hint_text("qbt_... (opcional; substitui usuário/senha)"),
+                        );
+                        ui.end_row();
+
                         ui.label("qui Proxy URL (opcional):");
                         ui.add(
                             egui::TextEdit::singleline(&mut tc.qui_proxy_url)

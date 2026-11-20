@@ -257,6 +257,9 @@ struct ConfigSetArgs {
     /// Senha do cliente BitTorrent
     #[arg(long)]
     client_pass: Option<String>,
+    /// API Key do qBittorrent 5.2+ (Authorization: Bearer qbt_...)
+    #[arg(long)]
+    client_api_key: Option<String>,
     /// URL do proxy qui (para qBittorrent)
     #[arg(long)]
     qui_proxy_url: Option<String>,
@@ -726,6 +729,9 @@ fn apply_config_set(cfg: &mut AppConfig, a: ConfigSetArgs) -> Result<()> {
     }
     if let Some(p) = a.client_pass {
         cfg.torrent_client.password = p;
+    }
+    if let Some(k) = a.client_api_key {
+        cfg.torrent_client.api_key = k;
     }
     if let Some(q) = a.qui_proxy_url {
         cfg.torrent_client.qui_proxy_url = q;
