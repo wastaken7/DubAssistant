@@ -42,6 +42,7 @@ pub struct SessionInfo {
 #[derive(Debug, Clone)]
 pub struct UploadResult {
     pub torrent_id: Option<String>,
+    pub download_link: Option<String>,
     pub final_url: String,
     pub message: String,
 }
@@ -67,29 +68,41 @@ pub struct CapybaraClient {
     http: Client,
     user_agent: String,
     api_key: String,
+    has_cookies: bool,
 }
 
 impl CapybaraClient {
     pub fn from_config(cfg: &AppConfig) -> Result<Self> {
-        let cookie_header = load_cookie_header(cfg)?;
+        let api_key = cfg.capybara_api_key.trim().to_string();
+        let cookie_header = load_cookie_header(cfg).ok();
+        let has_cookies = cookie_header
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+
+        if api_key.is_empty() && !has_cookies {
+            bail!(
+                "Configure a API Key do CapybaraBR (recomendado) ou seus cookies nas Configurações."
+            );
+        }
+
         let ua = if cfg.user_agent.trim().is_empty() {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string()
         } else {
             cfg.user_agent.trim().to_string()
         };
 
-        // Carrega os cookies num Jar compartilhado para que qualquer `Set-Cookie` retornado
-        // pelo GET /dublagens/upload (ex: rotação de laravel_session / XSRF-TOKEN via remember_web)
-        // seja aplicado automaticamente no POST /dublagens seguinte.
         let jar = Arc::new(Jar::default());
-        let base_url = Url::parse(BASE_URL)?;
-        for pair in cookie_header.split(';') {
-            let trimmed = pair.trim();
-            if !trimmed.is_empty() && trimmed.contains('=') {
-                jar.add_cookie_str(
-                    &format!("{trimmed}; Domain=capybarabr.com; Path=/"),
-                    &base_url,
-                );
+        if let Some(ch) = cookie_header {
+            let base_url = Url::parse(BASE_URL)?;
+            for pair in ch.split(';') {
+                let trimmed = pair.trim();
+                if !trimmed.is_empty() && trimmed.contains('=') {
+                    jar.add_cookie_str(
+                        &format!("{trimmed}; Domain=capybarabr.com; Path=/"),
+                        &base_url,
+                    );
+                }
             }
         }
 
@@ -102,8 +115,53 @@ impl CapybaraClient {
         Ok(Self {
             http,
             user_agent: ua,
-            api_key: cfg.capybara_api_key.trim().to_string(),
+            api_key,
+            has_cookies,
         })
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+
+    fn api_headers(&self) -> Result<HeaderMap> {
+        if self.api_key.is_empty() {
+            bail!("API Key do CapybaraBR não configurada nas Configurações.");
+        }
+        let mut h = HeaderMap::new();
+        h.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+                .context("API Key contém caracteres inválidos")?,
+        );
+        h.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        h.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&self.user_agent).context("User-Agent inválido")?,
+        );
+        Ok(h)
+    }
+
+    /// Testa a API Key do CapybaraBR sem precisar de cookies.
+    pub async fn test_api_key(&self) -> Result<String> {
+        let resp = self
+            .http
+            .get(format!("{BASE_URL}/api/torrents/filter?perPage=1"))
+            .headers(self.api_headers()?)
+            .send()
+            .await
+            .context("Erro de rede ao testar API Key no CapybaraBR")?;
+        let status = resp.status();
+        if status.as_u16() == 401 {
+            bail!("API Key inválida ou expirada (HTTP 401).");
+        }
+        if status.as_u16() == 403 {
+            bail!("Acesso negado pela API (HTTP 403). Verifique permissões e e-mail confirmado.");
+        }
+        if !status.is_success() {
+            bail!("API retornou HTTP {status}.");
+        }
+        Ok("API Key válida! Pronta para envio via /api/dubs/upload.".to_string())
     }
 
     fn web_headers(&self) -> Result<HeaderMap> {
@@ -163,8 +221,10 @@ impl CapybaraClient {
         })
     }
 
-    /// Verifica se já existem dublagens cadastradas no Acervo de Dublagens (`/dublagens` e RSS de dublagens)
-    /// para o título/TMDB informado.
+    /// Verifica se já existem dublagens cadastradas no Acervo de Dublagens.
+    /// - Se houver cookies configurados: consulta `/dublagens` + RSS pessoal das dublagens.
+    /// - Se houver API Key configurada: também verifica `/api/torrents/pending`.
+    /// (Obs.: o endpoint `POST /api/dubs/upload` também bloqueia duplicatas no servidor via HTTP 422.)
     pub async fn check_dupes(
         &self,
         title_pt_br: &str,
@@ -185,89 +245,201 @@ impl CapybaraClient {
             bail!("Informe um título ou TMDB ID antes de verificar duplicatas.");
         }
 
-        let mut url = Url::parse(&format!("{BASE_URL}/dublagens"))?;
-        url.query_pairs_mut().append_pair("search", search_term);
-
-        let resp = self
-            .http
-            .get(url)
-            .headers(self.web_headers()?)
-            .send()
-            .await
-            .context("Erro de rede ao consultar https://capybarabr.com/dublagens")?;
-
-        let status = resp.status();
-        let final_url = resp.url().to_string();
-        let body = resp.text().await?;
-
-        if status.as_u16() == 403 || status.as_u16() == 503 || body.contains("Just a moment...") {
-            bail!("Bloqueado pelo Cloudflare ao consultar /dublagens (HTTP {status}).");
-        }
-        if final_url.contains("/login") || body.contains("Faça login para acessar") {
-            bail!("Sessão expirada ao consultar /dublagens. Renove seus cookies.");
-        }
-        if !status.is_success() {
-            bail!("Falha ao consultar /dublagens (HTTP {status}).");
-        }
-
         let mut found: Vec<DupeEntry> = Vec::new();
 
-        // 1. Tenta ler o RSS pessoal das dublagens (exposto na sidebar de /dublagens) — XML estruturado e completo
-        if let Some(rss_base) = extract_dublagens_rss_url(&body) {
-            if let Ok(mut rss_url) = Url::parse(&rss_base) {
-                rss_url.query_pairs_mut().append_pair("search", search_term);
-                if let Ok(rss_resp) = self
-                    .http
-                    .get(rss_url)
-                    .headers(self.web_headers()?)
-                    .send()
-                    .await
-                {
-                    if rss_resp.status().is_success() {
-                        if let Ok(xml) = rss_resp.text().await {
-                            found.extend(parse_rss_dupes(
-                                &xml,
-                                title_pt_br,
-                                title_original,
-                                tmdb_id,
-                                codec_label,
-                                source_label,
-                            ));
+        // 1. Consulta `/dublagens` + RSS pessoal se houver cookies configurados
+        if self.has_cookies {
+            let mut url = Url::parse(&format!("{BASE_URL}/dublagens"))?;
+            url.query_pairs_mut().append_pair("search", search_term);
+
+            let resp = self
+                .http
+                .get(url)
+                .headers(self.web_headers()?)
+                .send()
+                .await
+                .context("Erro de rede ao consultar https://capybarabr.com/dublagens")?;
+
+            let status = resp.status();
+            let final_url = resp.url().to_string();
+            let body = resp.text().await?;
+
+            if status.as_u16() == 403 || status.as_u16() == 503 || body.contains("Just a moment...")
+            {
+                bail!("Bloqueado pelo Cloudflare ao consultar /dublagens (HTTP {status}).");
+            }
+            if final_url.contains("/login") || body.contains("Faça login para acessar") {
+                bail!("Sessão expirada ao consultar /dublagens. Renove seus cookies.");
+            }
+            if status.is_success() {
+                if let Some(rss_base) = extract_dublagens_rss_url(&body) {
+                    if let Ok(mut rss_url) = Url::parse(&rss_base) {
+                        rss_url.query_pairs_mut().append_pair("search", search_term);
+                        if let Ok(rss_resp) = self
+                            .http
+                            .get(rss_url)
+                            .headers(self.web_headers()?)
+                            .send()
+                            .await
+                        {
+                            if rss_resp.status().is_success() {
+                                if let Ok(xml) = rss_resp.text().await {
+                                    found.extend(parse_rss_dupes(
+                                        &xml,
+                                        title_pt_br,
+                                        title_original,
+                                        tmdb_id,
+                                        codec_label,
+                                        source_label,
+                                    ));
+                                }
+                            }
                         }
+                    }
+                }
+
+                let html_dupes = parse_html_dupes(
+                    &body,
+                    title_pt_br,
+                    title_original,
+                    tmdb_id,
+                    codec_label,
+                    source_label,
+                );
+                for item in html_dupes {
+                    let already = found.iter().any(|existing| {
+                        (item.id.is_some() && existing.id == item.id)
+                            || existing.title.eq_ignore_ascii_case(&item.title)
+                    });
+                    if !already {
+                        found.push(item);
                     }
                 }
             }
         }
 
-        // 2. Complementa parseando o HTML de /dublagens diretamente (links /torrents/<id> e linhas)
-        let html_dupes = parse_html_dupes(
-            &body,
-            title_pt_br,
-            title_original,
-            tmdb_id,
-            codec_label,
-            source_label,
-        );
-        for item in html_dupes {
-            let already = found.iter().any(|existing| {
-                (item.id.is_some() && existing.id == item.id)
-                    || existing.title.eq_ignore_ascii_case(&item.title)
-            });
-            if !already {
-                found.push(item);
+        // 2. Consulta `/api/torrents/pending` via API Key (verifica envios pendentes de moderação)
+        if !self.api_key.is_empty() {
+            if let Ok(headers) = self.api_headers() {
+                if let Ok(resp) = self
+                    .http
+                    .get(format!("{BASE_URL}/api/torrents/pending"))
+                    .headers(headers)
+                    .send()
+                    .await
+                {
+                    if resp.status().is_success() {
+                        if let Ok(json) = resp.json::<Value>().await {
+                            let pending = parse_pending_api_dupes(
+                                &json,
+                                title_pt_br,
+                                title_original,
+                                tmdb_id,
+                                codec_label,
+                                source_label,
+                            );
+                            for item in pending {
+                                let already = found.iter().any(|existing| {
+                                    (item.id.is_some() && existing.id == item.id)
+                                        || existing.title.eq_ignore_ascii_case(&item.title)
+                                });
+                                if !already {
+                                    found.push(item);
+                                }
+                            }
+                        }
+                    }
+                }
             }
+        } else if !self.has_cookies {
+            bail!("Configure cookies (para busca no /dublagens) ou API Key (para pendentes).");
         }
 
         Ok(found)
     }
 
-    /// Envia a dublagem via `POST https://capybarabr.com/dublagens` (`multipart/form-data`).
+    /// Envia a dublagem preferencialmente pela **API oficial** (`POST https://capybarabr.com/api/dubs/upload`)
+    /// quando a API Key estiver configurada, com fallback para o formulário web via cookies.
     pub async fn upload_dublagem(
         &self,
         meta: &UploadMetadata,
         torrent_path: &Path,
     ) -> Result<UploadResult> {
-        // 1. Obtém _token CSRF fresco
+        if !self.api_key.is_empty() {
+            return self.upload_dublagem_via_api(meta, torrent_path).await;
+        }
+        self.upload_dublagem_via_web(meta, torrent_path).await
+    }
+
+    /// Envio oficial via API: `POST https://capybarabr.com/api/dubs/upload` (`Authorization: Bearer`).
+    async fn upload_dublagem_via_api(
+        &self,
+        meta: &UploadMetadata,
+        torrent_path: &Path,
+    ) -> Result<UploadResult> {
+        let torrent_bytes = std::fs::read(torrent_path)
+            .with_context(|| format!("Falha ao ler arquivo .torrent: {}", torrent_path.display()))?;
+        let torrent_filename = torrent_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "dublagem.torrent".to_string());
+
+        let torrent_part = multipart::Part::bytes(torrent_bytes)
+            .file_name(torrent_filename)
+            .mime_str("application/x-bittorrent")?;
+
+        let mut form = multipart::Form::new()
+            .part("torrent", torrent_part)
+            .text("name", meta.release_name.trim().to_string())
+            .text("description", build_description_with_signature(&meta.description))
+            .text("category_id", meta.category.id().to_string())
+            .text("tmdb_id", meta.tmdb_id.trim().to_string())
+            .text("mediainfo", meta.source_mediainfo.clone())
+            .text("audio_mediainfo", meta.audio_mediainfo.clone())
+            .text("version", meta.version.form_value().to_string())
+            .text("source", meta.source.form_value().to_string())
+            .text("anon", if meta.anon { "1" } else { "0" }.to_string());
+
+        // `season_number` só é aceito em séries; em filmes a API recusa o campo!
+        if meta.category == Category::Series {
+            form = form.text("season_number", meta.season_number.trim().to_string());
+        }
+        if !meta.source_label.trim().is_empty() {
+            form = form.text("source_label", meta.source_label.trim().to_string());
+        }
+        if !meta.fps.trim().is_empty() {
+            form = form.text("fps", meta.fps.trim().to_string());
+        }
+        if !meta.studio.trim().is_empty() {
+            form = form.text("studio", meta.studio.trim().to_string());
+        }
+        if !meta.dub_year.trim().is_empty() {
+            form = form.text("dub_year", meta.dub_year.trim().to_string());
+        }
+        if !meta.note.trim().is_empty() {
+            form = form.text("note", meta.note.trim().to_string());
+        }
+
+        let resp = self
+            .http
+            .post(format!("{BASE_URL}/api/dubs/upload"))
+            .headers(self.api_headers()?)
+            .multipart(form)
+            .send()
+            .await
+            .context("Erro de rede ao enviar para POST /api/dubs/upload")?;
+
+        let status = resp.status().as_u16();
+        let body = resp.text().await?;
+        parse_api_upload_response(status, &body)
+    }
+
+    /// Fallback legado via formulário web (`POST /dublagens` com cookies + CSRF).
+    async fn upload_dublagem_via_web(
+        &self,
+        meta: &UploadMetadata,
+        torrent_path: &Path,
+    ) -> Result<UploadResult> {
         let session = self.test_session().await?;
 
         let torrent_bytes = std::fs::read(torrent_path)
@@ -299,7 +471,6 @@ impl CapybaraClient {
             .text("description", build_description_with_signature(&meta.description))
             .text("anon", if meta.anon { "1" } else { "0" }.to_string());
 
-        // `season_number` só deve ser enviado quando categoria == Séries ("15")
         if meta.category == Category::Series {
             form = form.text("season_number", meta.season_number.trim().to_string());
         }
@@ -328,61 +499,98 @@ impl CapybaraClient {
         let body = resp.text().await?;
 
         if status.as_u16() == 419 {
-            bail!("Sessão/CSRF expirado (HTTP 419). Renove seus cookies e tente novamente.");
+            bail!("Sessão/CSRF expirado (HTTP 419). Renove seus cookies ou configure a API Key.");
         }
         if status.as_u16() == 403 || status.as_u16() == 503 || body.contains("Just a moment...") {
             bail!(
-                "Bloqueado pelo Cloudflare (HTTP {status}). Exporte cookies recentes (com `cf_clearance`) e confira o User-Agent."
+                "Bloqueado pelo Cloudflare (HTTP {status}). Exporte cookies recentes ou configure a API Key."
             );
         }
-
         if final_url.contains("/login") {
             bail!("Sessão expirou durante o upload (redirecionado para /login).");
         }
 
-        // Sucesso típico do UNIT3D/Laravel: redireciona para /torrents/<id> ou /dublagens
         if let Some(tid) = extract_torrent_id_from_url(&final_url) {
             return Ok(UploadResult {
                 torrent_id: Some(tid.clone()),
+                download_link: None,
                 final_url,
-                message: format!("Dublagem enviada com sucesso! Torrent ID: {tid}"),
+                message: format!("Dublagem enviada com sucesso (via Web)! Torrent ID: {tid}"),
             });
         }
 
-        // Verifica se retornou erros de validação do Laravel
         let validation_errors = extract_laravel_errors(&body);
         if !validation_errors.is_empty() {
-            bail!("Erro de validação do CapybaraBR:\n- {}", validation_errors.join("\n- "));
+            bail!(
+                "Erro de validação do CapybaraBR:\n- {}",
+                validation_errors.join("\n- ")
+            );
         }
 
-        if final_url.contains("/dublagens/upload") || status.is_client_error() || status.is_server_error() {
+        if final_url.contains("/dublagens/upload")
+            || status.is_client_error()
+            || status.is_server_error()
+        {
             bail!(
                 "Upload não concluído (HTTP {status}, URL final: {final_url}). Verifique os campos obrigatórios."
             );
         }
 
-        // Caso tenha redirecionado para /dublagens ou página de sucesso sem ID explícito na URL
         let fallback_id = extract_torrent_id_from_html(&body);
         Ok(UploadResult {
             torrent_id: fallback_id,
+            download_link: None,
             final_url,
             message: "Dublagem enviada com sucesso! (Aguardando moderação no acervo)".to_string(),
         })
     }
 
-    /// Baixa o `.torrent` corrigido pelo servidor usando a API Key do CapybaraBR (`Authorization: Bearer`),
-    /// com fallback automático para download autenticado por cookies caso dublagens pendentes não estejam na API.
+    /// Baixa o `.torrent` corrigido pelo servidor usando o `download_link` retornado pela API de upload,
+    /// `/api/torrents/<id>`, `/torrents/download/<id>?confirmado=1` com Bearer token, ou fallback por cookies.
     pub async fn download_torrent_via_api(
         &self,
         torrent_id: &str,
+        direct_download_link: Option<&str>,
         dest_path: &Path,
     ) -> Result<DownloadedTorrent> {
         let tid = torrent_id.trim();
-        if tid.is_empty() {
-            bail!("Torrent ID vazio para download.");
+        let mut errors = Vec::new();
+
+        // Tentativa 0 (Melhor caminho): `download_link` retornado direto por POST /api/dubs/upload
+        if let Some(link) = direct_download_link.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let dl_url = ensure_confirmado_param(link);
+            if !self.api_key.is_empty() {
+                match self.try_download_with_bearer(&dl_url).await {
+                    Ok(bytes) => {
+                        return save_validated_torrent(
+                            bytes,
+                            dest_path,
+                            "API /api/dubs/upload (download_link)",
+                        );
+                    }
+                    Err(e) => errors.push(format!("download_link (Bearer): {e}")),
+                }
+            }
+            if self.has_cookies {
+                match self.try_download_with_cookies(&dl_url).await {
+                    Ok(bytes) => {
+                        return save_validated_torrent(
+                            bytes,
+                            dest_path,
+                            "download_link (Cookies)",
+                        );
+                    }
+                    Err(e) => errors.push(format!("download_link (Cookies): {e}")),
+                }
+            }
         }
 
-        let mut errors = Vec::new();
+        if tid.is_empty() {
+            bail!(
+                "Não foi possível baixar o .torrent (sem torrent_id):\n- {}",
+                errors.join("\n- ")
+            );
+        }
 
         // Tentativa 1: API oficial UNIT3D (GET /api/torrents/<id> -> attributes.download_link)
         if !self.api_key.is_empty() {
@@ -397,7 +605,11 @@ impl CapybaraClient {
             let direct_url = format!("{BASE_URL}/torrents/download/{tid}?confirmado=1");
             match self.try_download_with_bearer(&direct_url).await {
                 Ok(bytes) => {
-                    return save_validated_torrent(bytes, dest_path, "API Bearer (/torrents/download)");
+                    return save_validated_torrent(
+                        bytes,
+                        dest_path,
+                        "API Bearer (/torrents/download)",
+                    );
                 }
                 Err(e) => errors.push(format!("Bearer /torrents/download/{tid}: {e}")),
             }
@@ -406,19 +618,24 @@ impl CapybaraClient {
         }
 
         // Tentativa 3 (Fallback): Download autenticado via cookies de sessão
-        let web_url = format!("{BASE_URL}/torrents/download/{tid}?confirmado=1");
-        match self.try_download_with_cookies(&web_url).await {
-            Ok(bytes) => {
-                save_validated_torrent(bytes, dest_path, "Cookies de sessão (fallback)")
-            }
-            Err(e) => {
-                errors.push(format!("Cookies fallback: {e}"));
-                bail!(
-                    "Falha ao baixar o .torrent #{tid} do CapybaraBR:\n- {}",
-                    errors.join("\n- ")
-                );
+        if self.has_cookies {
+            let web_url = format!("{BASE_URL}/torrents/download/{tid}?confirmado=1");
+            match self.try_download_with_cookies(&web_url).await {
+                Ok(bytes) => {
+                    return save_validated_torrent(
+                        bytes,
+                        dest_path,
+                        "Cookies de sessão (fallback)",
+                    );
+                }
+                Err(e) => errors.push(format!("Cookies fallback: {e}")),
             }
         }
+
+        bail!(
+            "Falha ao baixar o .torrent #{tid} do CapybaraBR:\n- {}",
+            errors.join("\n- ")
+        );
     }
 
     async fn try_download_via_unit3d_api(&self, torrent_id: &str) -> Result<Vec<u8>> {
@@ -488,6 +705,161 @@ impl CapybaraClient {
             .context("Resposta recebida via cookies não é um .torrent válido")?;
         Ok(bytes)
     }
+}
+
+fn ensure_confirmado_param(link: &str) -> String {
+    if link.contains("confirmado=") {
+        link.to_string()
+    } else if link.contains('?') {
+        format!("{link}&confirmado=1")
+    } else {
+        format!("{link}?confirmado=1")
+    }
+}
+
+/// Interpreta a resposta JSON de `POST https://capybarabr.com/api/dubs/upload`
+/// (HTTP 200 sucesso, 422 validação/duplicata, 403 permissão, 401 token inválido).
+pub fn parse_api_upload_response(status: u16, body: &str) -> Result<UploadResult> {
+    if status == 401 {
+        let msg = serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|j| j.get("message").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| "Token da API ausente ou inválido.".to_string());
+        bail!("Autenticação API falhou (HTTP 401): {msg}");
+    }
+    if status == 403 {
+        let msg = serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|j| j.get("message").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| {
+                "Sem permissão de envio ao acervo ou e-mail não confirmado.".to_string()
+            });
+        bail!("Acesso negado pela API (HTTP 403): {msg}");
+    }
+
+    let json: Value = serde_json::from_str(body).with_context(|| {
+        format!("Resposta inesperada (não-JSON) da API (HTTP {status}): {}", &body[..body.len().min(300)])
+    })?;
+
+    if status == 422 || json.get("success").and_then(|v| v.as_bool()) == Some(false) {
+        let mut details = Vec::new();
+        if let Some(obj) = json.get("data").and_then(|v| v.as_object()) {
+            for (field, val) in obj {
+                if let Some(arr) = val.as_array() {
+                    for item in arr {
+                        if let Some(s) = item.as_str() {
+                            details.push(format!("{field}: {s}"));
+                        }
+                    }
+                } else if let Some(s) = val.as_str() {
+                    details.push(format!("{field}: {s}"));
+                }
+            }
+        }
+        let base_msg = json
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Erro de validação na API.");
+        if details.is_empty() {
+            bail!("Erro da API (HTTP {status}): {base_msg}");
+        }
+        bail!("Erro da API (HTTP {status}) — {base_msg}:\n- {}", details.join("\n- "));
+    }
+
+    if !(200..300).contains(&status) {
+        bail!("API retornou HTTP {status}: {body}");
+    }
+
+    let torrent_id = json
+        .pointer("/data/torrent_id")
+        .and_then(|v| {
+            v.as_u64()
+                .map(|n| n.to_string())
+                .or_else(|| v.as_str().map(|s| s.to_string()))
+        });
+    let download_link = json
+        .pointer("/data/download_link")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let status_str = json
+        .pointer("/data/status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pending");
+    let api_msg = json
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Dublagem enviada com sucesso via API!");
+
+    let final_url = match &torrent_id {
+        Some(tid) => format!("{BASE_URL}/torrents/{tid}"),
+        None => format!("{BASE_URL}/dublagens"),
+    };
+
+    let message = match &torrent_id {
+        Some(tid) => format!("{api_msg} (Torrent #{tid}, status: {status_str})"),
+        None => format!("{api_msg} (status: {status_str})"),
+    };
+
+    Ok(UploadResult {
+        torrent_id,
+        download_link,
+        final_url,
+        message,
+    })
+}
+
+pub fn parse_pending_api_dupes(
+    json: &Value,
+    title_pt_br: &str,
+    title_original: &str,
+    tmdb_id: &str,
+    codec_label: &str,
+    source_label: &str,
+) -> Vec<DupeEntry> {
+    let mut out = Vec::new();
+    let Some(items) = json.get("data").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for item in items {
+        let cat = item.get("category").and_then(|v| v.as_str()).unwrap_or("");
+        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        // Só considera pendentes da categoria de dublagens
+        if !cat.to_ascii_lowercase().contains("dublag") {
+            continue;
+        }
+        let item_tmdb = item
+            .get("tmdb_id")
+            .and_then(|v| {
+                v.as_u64()
+                    .map(|n| n.to_string())
+                    .or_else(|| v.as_str().map(|s| s.to_string()))
+            })
+            .unwrap_or_default();
+
+        let tmdb_match = !tmdb_id.trim().is_empty() && item_tmdb == tmdb_id.trim();
+        let title_match = matches_title_or_tmdb(name, title_pt_br, title_original, tmdb_id);
+        if !tmdb_match && !title_match {
+            continue;
+        }
+        let id = item.get("id").and_then(|v| {
+            v.as_str()
+                .map(|s| s.to_string())
+                .or_else(|| v.as_u64().map(|n| n.to_string()))
+        });
+        let url = id.as_ref().map(|tid| format!("{BASE_URL}/torrents/{tid}"));
+        let likely_same_release = is_likely_same(name, codec_label, source_label);
+        out.push(DupeEntry {
+            id,
+            title: name.to_string(),
+            details: "Pendente de moderação".to_string(),
+            url,
+            likely_same_release,
+        });
+    }
+    out
 }
 
 fn save_validated_torrent(
@@ -753,5 +1125,22 @@ mod tests {
         assert_eq!(dupes.len(), 1);
         assert_eq!(dupes[0].id.as_deref(), Some("102369"));
         assert!(dupes[0].likely_same_release);
+    }
+
+    #[test]
+    fn test_parse_api_upload_success_and_422_duplicate() {
+        let ok_body = r#"{"success":true,"data":{"torrent_id":123,"status":"pending","download_link":"https://capybarabr.com/torrents/download/123.abc"},"message":"Dublagem enviada."}"#;
+        let res = parse_api_upload_response(200, ok_body).unwrap();
+        assert_eq!(res.torrent_id.as_deref(), Some("123"));
+        assert_eq!(
+            res.download_link.as_deref(),
+            Some("https://capybarabr.com/torrents/download/123.abc")
+        );
+
+        let dup_body = r#"{"success":false,"message":"Validation Error.","data":{"duplicate":["Já existe uma dublagem idêntica no acervo."]}}"#;
+        let err = parse_api_upload_response(422, dup_body).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("duplicate"));
+        assert!(msg.contains("idêntica"));
     }
 }

@@ -389,7 +389,9 @@ impl CapybaraApp {
                                     self.meta.tmdb_id, self.meta.title_pt_br, self.meta.year
                                 ),
                             ));
-                            if load_cookie_header(&self.config).is_ok() {
+                            if load_cookie_header(&self.config).is_ok()
+                                || !self.config.capybara_api_key.trim().is_empty()
+                            {
                                 self.trigger_dupe_check();
                             }
                         }
@@ -501,6 +503,21 @@ impl CapybaraApp {
                         }
                         Err(e) => {
                             self.push_log(format!("[ERRO SESSÃO] {e}"));
+                            self.session_status = Some(Err(e.clone()));
+                            self.status_banner = Some((false, e));
+                        }
+                    }
+                }
+                WorkerEvent::ApiKeyTested(res) => {
+                    self.busy = false;
+                    match res {
+                        Ok(msg) => {
+                            self.push_log(msg.clone());
+                            self.session_status = Some(Ok(msg.clone()));
+                            self.status_banner = Some((true, msg));
+                        }
+                        Err(e) => {
+                            self.push_log(format!("[ERRO API KEY] {e}"));
                             self.session_status = Some(Err(e.clone()));
                             self.status_banner = Some((false, e));
                         }

@@ -75,14 +75,18 @@ pub enum DubVersion {
     Tv,
     Redub,
     Streaming,
+    HomeVideo,
+    Other,
 }
 
 impl DubVersion {
-    pub const ALL: [DubVersion; 4] = [
+    pub const ALL: [DubVersion; 6] = [
         DubVersion::Cinema,
         DubVersion::Tv,
         DubVersion::Redub,
         DubVersion::Streaming,
+        DubVersion::HomeVideo,
+        DubVersion::Other,
     ];
 
     pub fn form_value(self) -> &'static str {
@@ -91,6 +95,8 @@ impl DubVersion {
             DubVersion::Tv => "tv",
             DubVersion::Redub => "redub",
             DubVersion::Streaming => "streaming",
+            DubVersion::HomeVideo => "home_video",
+            DubVersion::Other => "other",
         }
     }
 
@@ -100,6 +106,8 @@ impl DubVersion {
             DubVersion::Tv => "TV / Clássica",
             DubVersion::Redub => "Redublagem",
             DubVersion::Streaming => "Streaming",
+            DubVersion::HomeVideo => "DVD / Blu-ray",
+            DubVersion::Other => "Outro",
         }
     }
 }

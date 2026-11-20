@@ -125,12 +125,14 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
     );
 
     ui.add_space(8.0);
+    let upload_btn_label = if !app.config.capybara_api_key.trim().is_empty() {
+        "Enviar Dublagem via API Oficial (/api/dubs/upload)"
+    } else {
+        "Enviar Dublagem via Cookies (/dublagens)"
+    };
     let can_upload = has_pkg && errors.is_empty() && !app.busy;
     if ui
-        .add_enabled(
-            can_upload,
-            egui::Button::new("Enviar Dublagem para https://capybarabr.com/dublagens"),
-        )
+        .add_enabled(can_upload, egui::Button::new(upload_btn_label))
         .clicked()
     {
         if let Some(pkg) = &app.package_output {

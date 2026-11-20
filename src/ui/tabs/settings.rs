@@ -61,7 +61,7 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                 );
                 ui.end_row();
 
-                ui.label("CapybaraBR API Key (download .torrent):");
+                ui.label("CapybaraBR API Key (recomendado — /api/dubs/upload):");
                 ui.add(
                     egui::TextEdit::singleline(&mut app.config.capybara_api_key)
                         .password(true)
@@ -69,7 +69,7 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                 );
                 ui.end_row();
 
-                ui.label("Announce URL (auto ao testar sessão):");
+                ui.label("Announce URL (auto ao testar cookies ou cole manual):");
                 ui.add(
                     egui::TextEdit::singleline(&mut app.config.announce_url)
                         .desired_width(500.0)
@@ -80,7 +80,17 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
 
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!app.busy, egui::Button::new("Testar Sessão & Capturar Announce"))
+                .add_enabled(!app.busy, egui::Button::new("Testar API Key"))
+                .clicked()
+            {
+                let _ = save_config(&app.config);
+                app.busy = true;
+                let _ = app.worker.tx.send(WorkerCommand::TestCapybaraApiKey {
+                    cfg: app.config.clone(),
+                });
+            }
+            if ui
+                .add_enabled(!app.busy, egui::Button::new("Testar Cookies & Capturar Announce"))
                 .clicked()
             {
                 let _ = save_config(&app.config);

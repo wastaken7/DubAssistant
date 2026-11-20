@@ -44,6 +44,12 @@ enum Commands {
         #[arg(long)]
         cookies: Option<PathBuf>,
     },
+    /// Testa a API Key do CapybaraBR (sem precisar de cookies)
+    TestApi {
+        /// API Key específica apenas para este teste
+        #[arg(long)]
+        api_key: Option<String>,
+    },
     /// Testa a conexão com o cliente BitTorrent configurado
     TestClient,
     /// Mostra o caminho do config.json e o status das ferramentas detectadas
@@ -93,6 +99,8 @@ enum CliVersion {
     Tv,
     Redub,
     Streaming,
+    HomeVideo,
+    Other,
 }
 
 impl From<CliVersion> for DubVersion {
@@ -102,6 +110,8 @@ impl From<CliVersion> for DubVersion {
             CliVersion::Tv => DubVersion::Tv,
             CliVersion::Redub => DubVersion::Redub,
             CliVersion::Streaming => DubVersion::Streaming,
+            CliVersion::HomeVideo => DubVersion::HomeVideo,
+            CliVersion::Other => DubVersion::Other,
         }
     }
 }
@@ -631,6 +641,15 @@ async fn main() -> Result<()> {
                 cfg.announce_url = ann;
                 save_config(&cfg)?;
             }
+            Ok(())
+        }
+        Commands::TestApi { api_key } => {
+            if let Some(k) = api_key {
+                cfg.capybara_api_key = k;
+            }
+            let client = CapybaraClient::from_config(&cfg)?;
+            let msg = client.test_api_key().await?;
+            println!("{msg}");
             Ok(())
         }
         Commands::TestClient => {
@@ -1370,19 +1389,27 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
     }
 
     // 5. Upload + Download via API + Injeção no Cliente BitTorrent
-    println!("[5/5] Enviando para https://capybarabr.com/dublagens...");
     let client = capy_client.unwrap_or(CapybaraClient::from_config(cfg)?);
+    if client.has_api_key() {
+        println!("[5/5] Enviando via API oficial (POST /api/dubs/upload)...");
+    } else {
+        println!("[5/5] Enviando via formulário web (POST /dublagens)...");
+    }
     let upload = client.upload_dublagem(&meta, &pkg.torrent_path).await?;
     println!("  {}", upload.message);
     println!("  URL: {}", upload.final_url);
 
     if !args.no_inject && cfg.auto_download_and_inject {
-        if let Some(tid) = &upload.torrent_id {
-            println!("  Baixando .torrent #{tid} corrigido via API...");
-            let dest_torrent = pkg
-                .torrent_path
-                .with_file_name(format!("[CAPYBARABR]_{tid}.torrent"));
-            let dl = client.download_torrent_via_api(tid, &dest_torrent).await?;
+        let tid_str = upload.torrent_id.as_deref().unwrap_or("");
+        if !tid_str.is_empty() || upload.download_link.is_some() {
+            println!("  Baixando .torrent #{tid_str} corrigido via API...");
+            let dest_torrent = pkg.torrent_path.with_file_name(format!(
+                "[CAPYBARABR]_{}.torrent",
+                if tid_str.is_empty() { "dub" } else { tid_str }
+            ));
+            let dl = client
+                .download_torrent_via_api(tid_str, upload.download_link.as_deref(), &dest_torrent)
+                .await?;
             println!(
                 "  .torrent baixado ({}) | InfoHash: {}",
                 dl.source_used, dl.infohash
@@ -1392,7 +1419,7 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                 .path
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| format!("{tid}.torrent"));
+                .unwrap_or_else(|| format!("{tid_str}.torrent"));
             let inj = inject_torrent(
                 &dl.bytes,
                 &fname,

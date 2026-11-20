@@ -66,6 +66,9 @@ pub enum WorkerCommand {
     TestCapybaraSession {
         cfg: AppConfig,
     },
+    TestCapybaraApiKey {
+        cfg: AppConfig,
+    },
     CheckDupes {
         cfg: AppConfig,
         title_pt_br: String,
@@ -106,6 +109,7 @@ pub enum WorkerEvent {
     PackageFinished(Result<PackageOutput, String>),
     SpectrogramFinished(Result<UploadedImage, String>),
     SessionTested(Result<SessionInfo, String>),
+    ApiKeyTested(Result<String, String>),
     DupesChecked(Result<Vec<DupeEntry>, String>),
     TorrentClientTested(Result<String, String>),
     UploadFinished(Result<UploadPipelineResult, String>),
@@ -323,6 +327,13 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                     });
                     let _ = tx.send(WorkerEvent::SessionTested(res));
                 }
+                WorkerCommand::TestCapybaraApiKey { cfg } => {
+                    let res = run_async_cancellable(&rt, &cancel, async move {
+                        let client = CapybaraClient::from_config(&cfg)?;
+                        client.test_api_key().await
+                    });
+                    let _ = tx.send(WorkerEvent::ApiKeyTested(res));
+                }
                 WorkerCommand::CheckDupes {
                     cfg,
                     title_pt_br,
@@ -360,10 +371,15 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                 } => {
                     let tx_log = tx.clone();
                     let res = run_async_cancellable(&rt, &cancel, async move {
-                        let _ = tx_log.send(WorkerEvent::Log(
-                            "Enviando dublagem para https://capybarabr.com/dublagens...".into(),
-                        ));
                         let client = CapybaraClient::from_config(&cfg)?;
+                        let endpoint_desc = if client.has_api_key() {
+                            "POST https://capybarabr.com/api/dubs/upload (API Key)"
+                        } else {
+                            "POST https://capybarabr.com/dublagens (Cookies)"
+                        };
+                        let _ = tx_log.send(WorkerEvent::Log(format!(
+                            "Enviando dublagem via {endpoint_desc}..."
+                        )));
                         let upload = client.upload_dublagem(&meta, &torrent_path).await?;
                         let _ = tx_log.send(WorkerEvent::Log(upload.message.clone()));
 
@@ -372,13 +388,23 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                         let mut injection_status = None;
 
                         if auto_download_and_inject {
-                            if let Some(tid) = &upload.torrent_id {
+                            let tid_str = upload.torrent_id.as_deref().unwrap_or("");
+                            if !tid_str.is_empty() || upload.download_link.is_some() {
                                 let _ = tx_log.send(WorkerEvent::Log(format!(
-                                    "Baixando .torrent #{tid} corrigido via API do CapybaraBR..."
+                                    "Baixando .torrent #{tid_str} corrigido via API do CapybaraBR..."
                                 )));
-                                let dest_torrent = torrent_path
-                                    .with_file_name(format!("[CAPYBARABR]_{tid}.torrent"));
-                                match client.download_torrent_via_api(tid, &dest_torrent).await {
+                                let dest_torrent = torrent_path.with_file_name(format!(
+                                    "[CAPYBARABR]_{}.torrent",
+                                    if tid_str.is_empty() { "dub" } else { tid_str }
+                                ));
+                                match client
+                                    .download_torrent_via_api(
+                                        tid_str,
+                                        upload.download_link.as_deref(),
+                                        &dest_torrent,
+                                    )
+                                    .await
+                                {
                                     Ok(dl) => {
                                         let _ = tx_log.send(WorkerEvent::Log(format!(
                                             ".torrent baixado ({}) | InfoHash: {}",
@@ -394,7 +420,7 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                                             .path
                                             .file_name()
                                             .map(|s| s.to_string_lossy().to_string())
-                                            .unwrap_or_else(|| format!("{tid}.torrent"));
+                                            .unwrap_or_else(|| format!("{tid_str}.torrent"));
 
                                         let _ = tx_log.send(WorkerEvent::Log(format!(
                                             "Injetando .torrent no cliente ({}) com delay de {}s...",
