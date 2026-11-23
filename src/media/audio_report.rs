@@ -46,6 +46,9 @@ const DURATION_ALERT_SECS: f64 = 1.0;
 /// Em codec lossless, corte abrupto abaixo disto sugere origem lossy.
 const LOSSY_ORIGIN_MAX_HZ: f64 = 19_000.0;
 
+/// Fração mínima da duração informada pelo ffprobe que precisa ser decodificada.
+const MIN_DECODED_FRACTION: f64 = 0.98;
+
 const FFT_N: usize = 4096;
 /// True peak só é interpolado perto do máximo já visto (−6 dB): mesmo resultado, fração do custo.
 const TRUE_PEAK_GATE: f32 = 0.5;
@@ -647,9 +650,24 @@ pub fn analyze_audio_file<F: FnMut(f32)>(
 
     let status = child.wait()?;
     let stderr = stderr_thread.join().unwrap_or_default();
-    if !status.success() && acc.frames == 0 {
+    // Um resultado parcial pareceria completo (duração errada, sem loudness): nunca aceitar.
+    if !status.success() {
         let tail: String = stderr.lines().rev().take(4).collect::<Vec<_>>().join(" | ");
-        bail!("ffmpeg falhou ao decodificar o áudio: {tail}");
+        bail!("ffmpeg falhou ao decodificar o áudio ({status}): {tail}");
+    }
+    // TrueHD/DTS-HD MA elementares são VBR: o ffprobe estima a duração pelo bitrate.
+    let duration_reliable = !(probe.codec_name == "truehd"
+        || probe.codec_name == "mlp"
+        || (probe.codec_name == "dts" && lossless));
+    if duration_reliable
+        && expected_frames > 0.0
+        && (acc.frames as f64) < expected_frames * MIN_DECODED_FRACTION
+    {
+        bail!(
+            "Decodificação incompleta: {} de {} decodificados.",
+            fmt_duration(acc.frames as f64 / sample_rate as f64),
+            fmt_duration(expected_frames / sample_rate as f64)
+        );
     }
     on_progress(1.0);
 
