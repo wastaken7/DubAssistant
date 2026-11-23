@@ -350,9 +350,15 @@ fn show_raw_disc_summary_and_tracks(app: &mut CapybaraApp, ui: &mut egui::Ui) {
 
                             let has_subs =
                                 title.tracks.iter().any(|t| t.kind == TrackKind::Subtitle);
-                            if has_subs && disc.kind == crate::domain::models::DiscKind::BluRay {
+                            if has_subs {
+                                let subs_label = match disc.kind {
+                                    crate::domain::models::DiscKind::BluRay => "Legendas PGS:",
+                                    crate::domain::models::DiscKind::Dvd => {
+                                        "Legendas VobSub (.idx/.sub):"
+                                    }
+                                };
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new("Legendas PGS:").strong());
+                                ui.label(egui::RichText::new(subs_label).strong());
                                 for t in title
                                     .tracks
                                     .iter_mut()

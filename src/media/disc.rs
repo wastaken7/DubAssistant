@@ -633,19 +633,7 @@ where
 
                 let mut sub_paths = Vec::new();
                 for (sub_i, sub) in sel_subs.iter().enumerate() {
-                    let lang_label = if is_portuguese_pt(sub) {
-                        "PT-PT".to_string()
-                    } else if is_portuguese(sub) {
-                        "PT-BR".to_string()
-                    } else {
-                        sub.language.to_ascii_uppercase()
-                    };
-                    let tag = if sub.forced { "Forced" } else { "Full" };
-                    let base = if ep_prefix.is_empty() {
-                        format!("{lang_label} ({tag})")
-                    } else {
-                        format!("{ep_prefix} - {lang_label} ({tag})")
-                    };
+                    let base = subtitle_base_name(sub, &ep_prefix);
                     let mut dest = out_folder.join(format!("{base}.sup"));
                     if sub_paths.contains(&dest) || dest.exists() {
                         dest = out_folder.join(format!("{base} #{}.sup", sub_i + 1));
@@ -731,17 +719,73 @@ where
                 ])
                 .arg(&audio_dest);
 
+                // Legendas VobSub: copiadas na MESMA leitura do DVD para .mks temporários
+                // (fora da pasta do torrent) e convertidas depois em .idx/.sub via mkvextract.
+                let sel_subs: Vec<&MediaTrack> = title
+                    .tracks
+                    .iter()
+                    .filter(|t| t.kind == TrackKind::Subtitle && t.selected)
+                    .collect();
+                let mkvextract = cfg.mkvextract_path.trim().to_string();
+                let mut sub_jobs: Vec<(PathBuf, PathBuf)> = Vec::new();
+                let mut sub_tmp_dir: Option<PathBuf> = None;
+                if !sel_subs.is_empty() {
+                    if mkvextract.is_empty() {
+                        log("[AVISO] mkvextract (MKVToolNix) não configurado: legendas do DVD não serão extraídas.".into());
+                    } else {
+                        let tmp = std::env::temp_dir().join(format!(
+                            "DubAssistant_dvdsubs_{}_{}",
+                            std::process::id(),
+                            chrono::Utc::now().timestamp_millis()
+                        ));
+                        std::fs::create_dir_all(&tmp)?;
+                        for (sub_i, sub) in sel_subs.iter().enumerate() {
+                            let base = subtitle_base_name(sub, &ep_prefix);
+                            let mut dest = out_folder.join(format!("{base}.sub"));
+                            if sub_jobs.iter().any(|(_, d)| d == &dest) || dest.exists() {
+                                dest = out_folder.join(format!("{base} #{}.sub", sub_i + 1));
+                            }
+                            let mks = tmp.join(format!("sub_{sub_i}.mks"));
+                            cmd.args([
+                                "-map",
+                                &format!("0:{}", sub.id),
+                                "-c:s",
+                                "copy",
+                                "-f",
+                                "matroska",
+                            ])
+                            .arg(&mks);
+                            sub_jobs.push((mks, dest));
+                        }
+                        sub_tmp_dir = Some(tmp);
+                    }
+                }
+                let cleanup_tmp = |dir: &Option<PathBuf>| {
+                    if let Some(tmp) = dir {
+                        let _ = std::fs::remove_dir_all(tmp);
+                    }
+                };
+
                 log(format!(
-                    "[{}/{}] Extraindo DVD {} via ffmpeg dvdvideo -> {}...",
+                    "[{}/{}] Extraindo DVD {} via ffmpeg dvdvideo -> {} + {} legenda(s)...",
                     idx + 1,
                     selected_titles.len(),
                     title.label,
-                    audio_name
+                    audio_name,
+                    sub_jobs.len()
                 ));
 
-                let out = run_command_cancellable(&mut cmd, cancel)
-                    .context("Falha ao executar ffmpeg dvdvideo")?;
+                let out = match run_command_cancellable(&mut cmd, cancel)
+                    .context("Falha ao executar ffmpeg dvdvideo")
+                {
+                    Ok(o) => o,
+                    Err(e) => {
+                        cleanup_tmp(&sub_tmp_dir);
+                        return Err(e);
+                    }
+                };
                 if !out.status.success() {
+                    cleanup_tmp(&sub_tmp_dir);
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     bail!("ffmpeg dvdvideo falhou: {stderr}");
                 }
@@ -750,6 +794,27 @@ where
                     first_audio = Some(audio_dest.clone());
                 }
                 created_files.push(audio_dest);
+
+                let frame_height = dvd_frame_height(title.fps.as_deref());
+                for (mks, dest) in &sub_jobs {
+                    match extract_vobsub(&mkvextract, mks, dest, frame_height, cancel) {
+                        Ok(files) => {
+                            log(format!(
+                                "Legenda VobSub extraída: {}",
+                                dest.file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_default()
+                            ));
+                            created_files.extend(files);
+                        }
+                        Err(e) if cancel.is_cancelled() => {
+                            cleanup_tmp(&sub_tmp_dir);
+                            return Err(e);
+                        }
+                        Err(e) => log(format!("[AVISO] Falha ao converter legenda do DVD: {e:#}")),
+                    }
+                }
+                cleanup_tmp(&sub_tmp_dir);
 
                 if meta.category == Category::Movie && idx == 0 {
                     if let Some(ch_txt) = &title.chapters_text {
@@ -865,6 +930,82 @@ fn first_m2ts_per_title(output: &str) -> HashMap<u32, String> {
             Some((caps[1].parse().ok()?, caps[2].to_string()))
         })
         .collect()
+}
+
+/// Nome base das legendas extraídas: "PT-BR (Full)", "S01E02 - PT-BR (Forced)"...
+fn subtitle_base_name(sub: &MediaTrack, ep_prefix: &str) -> String {
+    let lang_label = if is_portuguese_pt(sub) {
+        "PT-PT".to_string()
+    } else if is_portuguese(sub) {
+        "PT-BR".to_string()
+    } else {
+        sub.language.to_ascii_uppercase()
+    };
+    let tag = if sub.forced { "Forced" } else { "Full" };
+    if ep_prefix.is_empty() {
+        format!("{lang_label} ({tag})")
+    } else {
+        format!("{ep_prefix} - {lang_label} ({tag})")
+    }
+}
+
+/// Altura do quadro do DVD para o cabeçalho VobSub: PAL (25 fps) = 576, NTSC = 480.
+fn dvd_frame_height(fps: Option<&str>) -> u32 {
+    let is_pal = fps
+        .and_then(|f| f.trim().parse::<f64>().ok())
+        .map(|f| (f - 25.0).abs() < 0.01 || (f - 50.0).abs() < 0.01)
+        .unwrap_or(false);
+    if is_pal {
+        576
+    } else {
+        480
+    }
+}
+
+/// Converte um .mks com `dvd_subtitle` no par VobSub `.idx` + `.sub` via mkvextract.
+/// Garante a linha `size:` no .idx (o ffmpeg só exporta a paleta do IFO).
+fn extract_vobsub(
+    mkvextract: &str,
+    mks: &Path,
+    dest_sub: &Path,
+    frame_height: u32,
+    cancel: &CancelHandle,
+) -> Result<Vec<PathBuf>> {
+    if std::fs::metadata(mks).map(|m| m.len()).unwrap_or(0) == 0 {
+        bail!("faixa de legenda vazia no DVD");
+    }
+    let mut cmd = Command::new(mkvextract);
+    cmd.arg(mks)
+        .arg("tracks")
+        .arg(format!("0:{}", dest_sub.to_string_lossy()));
+    let out = run_command_cancellable(&mut cmd, cancel).context("Falha ao executar mkvextract")?;
+    let idx = dest_sub.with_extension("idx");
+    if !out.status.success() || !dest_sub.is_file() || !idx.is_file() {
+        bail!(
+            "mkvextract não gerou .idx/.sub: {}",
+            String::from_utf8_lossy(&out.stdout).lines().last().unwrap_or("")
+        );
+    }
+    let text = std::fs::read_to_string(&idx)?;
+    let fixed = ensure_vobsub_size(&text, 720, frame_height);
+    if fixed != text {
+        std::fs::write(&idx, fixed)?;
+    }
+    Ok(vec![idx, dest_sub.to_path_buf()])
+}
+
+fn ensure_vobsub_size(idx_text: &str, width: u32, height: u32) -> String {
+    if idx_text.lines().any(|l| l.trim_start().starts_with("size:")) {
+        return idx_text.to_string();
+    }
+    let size_line = format!("size: {width}x{height}");
+    let nl = if idx_text.contains("\r\n") { "\r\n" } else { "\n" };
+    match idx_text.split_once(nl) {
+        Some((header, rest)) if header.starts_with('#') => {
+            format!("{header}{nl}{size_line}{nl}{rest}")
+        }
+        _ => format!("{size_line}{nl}{idx_text}"),
+    }
 }
 
 fn cleanup_eac3to_logs(dir: &Path) {
@@ -993,6 +1134,20 @@ pub fn format_dvd_chapters(chapters: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vobsub_size_line_inserted_once() {
+        let idx = "# VobSub index file, v7 (do not modify this line!)\npalette: 000000\n";
+        let fixed = ensure_vobsub_size(idx, 720, 480);
+        assert_eq!(
+            fixed,
+            "# VobSub index file, v7 (do not modify this line!)\nsize: 720x480\npalette: 000000\n"
+        );
+        assert_eq!(ensure_vobsub_size(&fixed, 720, 576), fixed);
+        assert_eq!(dvd_frame_height(Some("25")), 576);
+        assert_eq!(dvd_frame_height(Some("23.976")), 480);
+        assert_eq!(dvd_frame_height(None), 480);
+    }
     use crate::domain::models::AudioCodec;
 
     #[test]
