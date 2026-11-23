@@ -31,6 +31,9 @@ pub struct DiscTitle {
     pub duration_str: String,
     pub duration_secs: u64,
     pub fps: Option<String>,
+    /// Como o FPS foi determinado (ex: telecine detectado). None = valor nominal do container.
+    #[serde(default)]
+    pub fps_detail: Option<String>,
     pub has_chapters: bool,
     pub chapters_track_id: Option<u32>,
     pub chapters_text: Option<String>,
@@ -245,6 +248,9 @@ pub struct InspectedVideo {
     pub embedded_tmdb_id: Option<String>,
     pub embedded_tmdb_category: Option<Category>,
     pub fps: Option<String>,
+    /// Como o FPS foi determinado (ex: telecine detectado, VFR). None = valor do MediaInfo.
+    #[serde(default)]
+    pub fps_detail: Option<String>,
     pub duration_str: Option<String>,
     pub has_chapters: bool,
     pub tracks: Vec<MediaTrack>,

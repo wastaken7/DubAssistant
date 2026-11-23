@@ -1,6 +1,7 @@
 use crate::config::save_config;
 use crate::domain::models::{AudioCodec, Category, DubVersion, InputMode, SourceType, TrackKind};
 use crate::domain::rules::{build_official_release_name, sanitize_windows_filename};
+use crate::media::fps::fps_with_detail;
 use crate::ui::app::CapybaraApp;
 use crate::worker::WorkerCommand;
 use eframe::egui;
@@ -176,7 +177,7 @@ fn show_video_summary_and_tracks(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                     "#{} {}  |  FPS: {}  |  Capítulos: {}{}",
                     vid_idx + 1,
                     fname,
-                    video.fps.as_deref().unwrap_or("?"),
+                    fps_with_detail(video.fps.as_deref(), video.fps_detail.as_deref()),
                     if video.has_chapters { "Sim" } else { "Não" },
                     video
                         .embedded_tmdb_id
@@ -313,7 +314,7 @@ fn show_raw_disc_summary_and_tracks(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                     let t_header = format!(
                         "{}  |  FPS: {}  |  Capítulos: {}",
                         title.label,
-                        title.fps.as_deref().unwrap_or("?"),
+                        fps_with_detail(title.fps.as_deref(), title.fps_detail.as_deref()),
                         if title.has_chapters { "Sim" } else { "Não" }
                     );
                     egui::CollapsingHeader::new(t_header)

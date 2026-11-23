@@ -1,5 +1,6 @@
 pub mod disc;
 pub mod extractor;
+pub mod fps;
 pub mod inspector;
 pub mod spectrogram;
 

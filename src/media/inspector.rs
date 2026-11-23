@@ -6,6 +6,7 @@ use crate::domain::models::{
 use crate::domain::rules::{
     classify_audio_codec, classify_extracted_file, extract_episode_tag, FolderFileClass,
 };
+use crate::media::fps::{self, ProbeSource};
 use anyhow::{bail, Context, Result};
 use regex::Regex;
 use serde_json::Value;
@@ -124,6 +125,10 @@ pub fn inspect_single_video(
         bail!("Tarefa cancelada pelo usuário.");
     }
     let parsed_mi = parse_mediainfo_summary(&raw_mediainfo);
+    let (fps, fps_detail) = refine_video_fps(cfg, path, &parsed_mi, cancel);
+    if cancel.is_cancelled() {
+        bail!("Tarefa cancelada pelo usuário.");
+    }
 
     let (mut tracks, has_chapters, ffprobe_tmdb) =
         if is_mkv && !cfg.mkvmerge_path.trim().is_empty() {
@@ -154,12 +159,46 @@ pub fn inspect_single_video(
         episode_tag,
         embedded_tmdb_id,
         embedded_tmdb_category,
-        fps: parsed_mi.fps,
+        fps,
+        fps_detail,
         duration_str: parsed_mi.duration,
         has_chapters,
         tracks,
         raw_mediainfo,
     })
+}
+
+/// Confere o FPS informado pelo MediaInfo: VFR vira a taxa dominante, e 29.97 / 59.94
+/// passam pela análise de cadência (telecine). Demais casos ficam como estão.
+fn refine_video_fps(
+    cfg: &AppConfig,
+    path: &Path,
+    mi: &MediaInfoSummary,
+    cancel: &CancelHandle,
+) -> (Option<String>, Option<String>) {
+    let mut fps_label = mi.fps.clone();
+    let mut detail: Option<String> = None;
+
+    if mi.fps_variable {
+        if let Some(v) = fps::analyze_vfr(cfg, path, None, cancel) {
+            fps_label = Some(v.fps);
+            detail = (!v.detail.is_empty()).then_some(v.detail);
+        }
+    }
+
+    let nominal = fps_label.as_deref().and_then(fps::parse_fps_value);
+    if let Some(nominal) = nominal.filter(|n| fps::needs_cadence_analysis(*n)) {
+        if let Some(c) = fps::analyze_cadence(cfg, ProbeSource::File(path), nominal, None, cancel)
+        {
+            fps_label = Some(c.fps);
+            detail = Some(match detail {
+                Some(d) => format!("{d}; {}", c.detail),
+                None => c.detail,
+            });
+        }
+    }
+
+    (fps_label, detail)
 }
 
 /// Extrai a tag `TMDB` (ex: `movie/1368337`, `tv/12345`, `1368337`) via `ffprobe -show_entries format_tags`.
@@ -521,6 +560,8 @@ pub fn format_channel_count(ch: u64) -> String {
 #[derive(Debug, Default, Clone)]
 pub struct MediaInfoSummary {
     pub fps: Option<String>,
+    /// `Frame rate mode: Variable` (VFR)
+    pub fps_variable: bool,
     pub duration: Option<String>,
     pub audio_codec: Option<AudioCodec>,
     pub audio_bitrate_kbps: Option<u32>,
@@ -574,6 +615,10 @@ pub fn parse_mediainfo_summary(mi: &str) -> MediaInfoSummary {
             "video" => {
                 if key == "Frame rate" && summary.fps.is_none() {
                     summary.fps = extract_fps_number(val);
+                } else if key == "Frame rate mode"
+                    && val.to_ascii_lowercase().starts_with("variable")
+                {
+                    summary.fps_variable = true;
                 }
             }
             "audio" => match key {
