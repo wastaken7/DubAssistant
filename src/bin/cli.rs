@@ -13,7 +13,9 @@ use dub_assistant::domain::rules::{
     build_official_release_name, detect_source_from_name_and_codec, validate_upload_metadata,
 };
 use dub_assistant::imghost::upload_image;
-use dub_assistant::media::disc::{inspect_raw_disc, process_raw_disc_and_package};
+use dub_assistant::media::disc::{
+    disc_query_name, inspect_raw_disc, process_raw_disc_and_package,
+};
 use dub_assistant::media::extractor::{
     organize_extracted_folder_and_package, process_videos_and_package,
 };
@@ -722,6 +724,9 @@ async fn main() -> Result<()> {
                     .and_then(|r| probe_duration_secs(&cfg, r, &cancel)),
                 fps,
             };
+            if cancel.is_cancelled() {
+                bail!("Tarefa cancelada pelo usuário.");
+            }
             println!("{}", render_single(&analysis, &ctx));
             eprintln!("\n(análise em {:.1}s)", started.elapsed().as_secs_f64());
             Ok(())
@@ -1134,8 +1139,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                 }
             }
             meta.source_mediainfo = disc.raw_mediainfo.clone();
-            if let Some(name) = disc.root_dir.file_name() {
-                search_hint = guess_search_query_from_name(&name.to_string_lossy());
+            if let Some(name) = disc_query_name(&disc.root_dir) {
+                search_hint = guess_search_query_from_name(&name);
             }
             disc_opt = Some(disc);
         }
@@ -1376,7 +1381,7 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
             println!("  {m}")
         })?;
         if let Some(report) = &pkg.audio_report {
-            upsert_report(&mut meta.description, None, report);
+            upsert_report(&mut meta.description, report);
         }
     }
 

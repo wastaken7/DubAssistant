@@ -10,7 +10,8 @@ use crate::domain::rules::{
     validate_upload_metadata,
 };
 use crate::imghost::UploadedImage;
-use crate::media::audio_report::upsert_report;
+use crate::media::audio_report::{remove_report, upsert_report};
+use crate::media::disc::disc_query_name;
 use crate::media::{detect_input_kind, DetectedInput};
 use crate::tmdb::client::{guess_search_query_from_name, PosterImage, TmdbDetails, TmdbSearchItem};
 use crate::ui::tabs;
@@ -48,8 +49,6 @@ pub struct CapybaraApp {
     // Estado de processamento / upload
     pub package_output: Option<PackageOutput>,
     pub spectrogram_image: Option<UploadedImage>,
-    /// Último relatório de áudio inserido na descrição (para substituir em vez de duplicar).
-    pub last_audio_report: Option<String>,
     pub upload_result: Option<UploadPipelineResult>,
     pub pending_upload_after_package: bool,
     pub confirm_dupe_override: bool,
@@ -90,7 +89,6 @@ impl CapybaraApp {
             auto_tmdb_search: false,
             package_output: None,
             spectrogram_image: None,
-            last_audio_report: None,
             upload_result: None,
             pending_upload_after_package: false,
             confirm_dupe_override: false,
@@ -134,7 +132,6 @@ impl CapybaraApp {
         self.auto_tmdb_search = false;
         self.package_output = None;
         self.spectrogram_image = None;
-        self.last_audio_report = None;
         self.upload_result = None;
         self.pending_upload_after_package = false;
         self.confirm_dupe_override = false;
@@ -616,22 +613,7 @@ impl CapybaraApp {
                             if !disc.raw_mediainfo.is_empty() {
                                 self.meta.source_mediainfo = disc.raw_mediainfo.clone();
                             }
-                            let name_for_query = if disc
-                                .root_dir
-                                .file_name()
-                                .map(|n| n.to_string_lossy().eq_ignore_ascii_case("VIDEO_TS"))
-                                .unwrap_or(false)
-                            {
-                                disc.root_dir
-                                    .parent()
-                                    .and_then(|p| p.file_name())
-                                    .map(|n| n.to_string_lossy().to_string())
-                            } else {
-                                disc.root_dir
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                            };
-                            if let Some(name) = name_for_query {
+                            if let Some(name) = disc_query_name(&disc.root_dir) {
                                 self.tmdb_query = guess_search_query_from_name(&name);
                             }
                             self.push_log(format!(
@@ -775,13 +757,12 @@ impl CapybaraApp {
                                 }
                                 self.meta.description.push_str(&warn_block);
                             }
-                            if let Some(report) = &out.audio_report {
-                                upsert_report(
-                                    &mut self.meta.description,
-                                    self.last_audio_report.as_deref(),
-                                    report,
-                                );
-                                self.last_audio_report = Some(report.clone());
+                            // Substitui o relatório anterior (mesmo editado); sem relatório novo
+                            // (opção desligada ou análise falhou), remove o antigo para não
+                            // enviar medições de outro pacote.
+                            match &out.audio_report {
+                                Some(report) => upsert_report(&mut self.meta.description, report),
+                                None => remove_report(&mut self.meta.description),
                             }
                             let auto_spec_audio = if self.config.image_host.auto_generate_spectrogram
                             {

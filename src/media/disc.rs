@@ -932,6 +932,17 @@ fn first_m2ts_per_title(output: &str) -> HashMap<u32, String> {
         .collect()
 }
 
+/// Nome usado para buscar o título no TMDB: a pasta do disco, nunca `VIDEO_TS`/`BDMV`.
+pub fn disc_query_name(root_dir: &Path) -> Option<String> {
+    let own = root_dir.file_name()?.to_string_lossy().to_string();
+    if own.eq_ignore_ascii_case("VIDEO_TS") || own.eq_ignore_ascii_case("BDMV") {
+        if let Some(parent) = root_dir.parent().and_then(|p| p.file_name()) {
+            return Some(parent.to_string_lossy().to_string());
+        }
+    }
+    Some(own)
+}
+
 /// Nome base das legendas extraídas: "PT-BR (Full)", "S01E02 - PT-BR (Forced)"...
 fn subtitle_base_name(sub: &MediaTrack, ep_prefix: &str) -> String {
     let lang_label = if is_portuguese_pt(sub) {
@@ -1134,6 +1145,16 @@ pub fn format_dvd_chapters(chapters: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disc_query_name_skips_structure_folders() {
+        let p = Path::new("H:/DVDs/Baladas.em.NY.1995/VIDEO_TS");
+        assert_eq!(disc_query_name(p).as_deref(), Some("Baladas.em.NY.1995"));
+        let p = Path::new("F:/Blu-ray/Filme.2001/BDMV");
+        assert_eq!(disc_query_name(p).as_deref(), Some("Filme.2001"));
+        let p = Path::new("F:/Blu-ray/Filme.2001");
+        assert_eq!(disc_query_name(p).as_deref(), Some("Filme.2001"));
+    }
 
     #[test]
     fn vobsub_size_line_inserted_once() {

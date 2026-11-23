@@ -287,7 +287,7 @@ fn probe_stream(
     Ok(StreamProbe {
         codec_name: str_of(s, "codec_name"),
         profile: str_of(s, "profile"),
-        sample_rate: str_of(s, "sample_rate").parse().unwrap_or(48_000),
+        sample_rate: str_of(s, "sample_rate").parse().unwrap_or(0),
         channels: s.get("channels").and_then(|v| v.as_u64()).unwrap_or(2) as usize,
         channel_layout: str_of(s, "channel_layout"),
         duration_secs,
@@ -310,7 +310,8 @@ pub fn probe_duration_secs(cfg: &AppConfig, path: &Path, cancel: &CancelHandle) 
         "-print_format",
         "json",
         "-select_streams",
-        "v:0",
+        // V maiúsculo: ignora capas/thumbnails (attached pictures)
+        "V:0",
         "-show_streams",
     ])
     .arg(path);
@@ -357,6 +358,34 @@ fn codec_label(codec_name: &str, profile: &str) -> (String, bool) {
         "mp3" => ("MP3".into(), false),
         c if c.starts_with("pcm_") => ("PCM".into(), true),
         other => (other.to_ascii_uppercase(), false),
+    }
+}
+
+fn layout_is_unknown(layout_lower: &str) -> bool {
+    layout_lower.is_empty() || layout_lower == "unknown" || layout_lower.ends_with("channels")
+}
+
+/// Rótulo do layout para o relatório (ex: "5.1", "2.0", "6.0"), a partir do layout do ffprobe.
+pub fn layout_label(layout: &str, channels: usize) -> String {
+    let l = layout.trim().to_ascii_lowercase();
+    let known = match l.as_str() {
+        "mono" => "1.0",
+        "stereo" | "downmix" => "2.0",
+        "2.1" => "2.1",
+        "3.0" => "3.0",
+        "4.0" | "quad" | "quad(side)" => "4.0",
+        "5.0" | "5.0(side)" => "5.0",
+        "5.1" | "5.1(side)" => "5.1",
+        "6.1" => "6.1",
+        "7.1" => "7.1",
+        _ => "",
+    };
+    if !known.is_empty() {
+        known.to_string()
+    } else if layout_is_unknown(&l) {
+        format_channel_count(channels as u64)
+    } else {
+        layout.trim().to_string()
     }
 }
 
@@ -436,7 +465,13 @@ pub fn channel_map(layout: &str, channels: usize) -> Vec<(String, ChannelRole)> 
     if spec.len() == channels {
         return spec.iter().map(|(n, r)| (n.to_string(), *r)).collect();
     }
-    // Layout desconhecido: deduz pelo número de canais.
+    // Só deduz pelo número de canais quando o layout é desconhecido; um layout conhecido
+    // fora da tabela (ex: 6.0, hexagonal) recebe nomes genéricos em vez de um LFE inventado.
+    if !layout_is_unknown(&l) {
+        return (0..channels)
+            .map(|i| (format!("Ch{}", i + 1), Other))
+            .collect();
+    }
     let fallback = match channels {
         1 => "mono",
         2 => "stereo",
@@ -551,7 +586,11 @@ pub fn analyze_audio_file<F: FnMut(f32)>(
     }
     let probe = probe_stream(cfg, path, stream_index, cancel)?;
     let channels = probe.channels.max(1);
-    let sample_rate = probe.sample_rate.max(8000);
+    // O ffmpeg entrega o PCM na taxa nativa (sem -ar): usar exatamente essa taxa.
+    let sample_rate = probe.sample_rate;
+    if sample_rate == 0 {
+        bail!("Taxa de amostragem inválida/ausente em {}", path.display());
+    }
     let (codec_lbl, lossless) = codec_label(&probe.codec_name, &probe.profile);
 
     let mut cmd = Command::new(ffmpeg);
@@ -582,6 +621,13 @@ pub fn analyze_audio_file<F: FnMut(f32)>(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("Falha ao iniciar ffmpeg ({ffmpeg}) para análise de áudio"))?;
+    // Permite que cancel() mate o ffmpeg mesmo com a thread bloqueada em stdout.read().
+    let _pid_guard = cancel.track_pid(child.id());
+    if cancel.is_cancelled() {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("Tarefa cancelada pelo usuário.");
+    }
     let mut stdout = child
         .stdout
         .take()
@@ -650,6 +696,9 @@ pub fn analyze_audio_file<F: FnMut(f32)>(
 
     let status = child.wait()?;
     let stderr = stderr_thread.join().unwrap_or_default();
+    if cancel.is_cancelled() {
+        bail!("Tarefa cancelada pelo usuário.");
+    }
     // Um resultado parcial pareceria completo (duração errada, sem loudness): nunca aceitar.
     if !status.success() {
         let tail: String = stderr.lines().rev().take(4).collect::<Vec<_>>().join(" | ");
@@ -685,7 +734,7 @@ pub fn analyze_audio_file<F: FnMut(f32)>(
         codec_label: codec_lbl,
         lossless,
         sample_rate,
-        layout_label: format_channel_count(channels as u64),
+        layout_label: layout_label(&probe.channel_layout, channels),
         dialnorm_db: read_dialnorm(path, &probe.codec_name),
         loudness: parse_ebur128_summary(&stderr),
         // true peak calculado no acumulador (ver TP_COEFFS)
@@ -943,6 +992,14 @@ impl Accumulator {
             }
         }
 
+        // Esvazia o FIR do true peak: as últimas amostras ainda não passaram pelos taps centrais.
+        // Só o filtro recebe os zeros; duração e demais medições já foram fechadas acima.
+        for _ in 0..12 {
+            for ch in 0..self.channels {
+                self.true_peak_step(ch, 0.0);
+            }
+            self.tp_pos = (self.tp_pos + 1) % 12;
+        }
         let true_peak_db = (self.tp_max > 0.0).then(|| 20.0 * (self.tp_max as f64).log10());
         let loudness = h.loudness.map(|l| Loudness {
             true_peak_dbtp: true_peak_db,
@@ -1430,9 +1487,23 @@ pub fn render_single(a: &AudioAnalysis, ctx: &ReportContext) -> String {
 }
 
 /// Relatório compacto de vários arquivos (temporadas): uma linha por arquivo.
+fn format_summary(a: &AudioAnalysis) -> String {
+    format!(
+        "{} · {} · {} kHz",
+        a.codec_label,
+        a.layout_label,
+        a.sample_rate as f64 / 1000.0
+    )
+}
+
 pub fn render_multi(items: &[(AudioAnalysis, ReportContext)]) -> String {
-    let mut table = String::from(
-        "[table]\n[tr][th]Arquivo[/th][th]Duração[/th][th]Loudness[/th][th]LRA[/th][th]True Peak[/th][th]Canais[/th][th]Banda[/th][th]Clipping[/th][/tr]\n",
+    // Temporada uniforme: formato no cabeçalho. Mista: coluna "Formato" por arquivo.
+    let uniform = items
+        .iter()
+        .all(|(a, _)| format_summary(a) == format_summary(&items[0].0));
+    let mut table = format!(
+        "[table]\n[tr][th]Arquivo[/th]{}[th]Duração[/th][th]Loudness[/th][th]LRA[/th][th]True Peak[/th][th]Canais[/th][th]Banda[/th][th]Clipping[/th][/tr]\n",
+        if uniform { "" } else { "[th]Formato[/th]" }
     );
     let mut all_findings = String::new();
     for (a, ctx) in items {
@@ -1446,8 +1517,13 @@ pub fn render_multi(items: &[(AudioAnalysis, ReportContext)]) -> String {
             ),
             None => fmt_duration(a.duration_secs),
         };
+        let fmt_col = if uniform {
+            String::new()
+        } else {
+            format!("[td]{}[/td]", format_summary(a))
+        };
         table.push_str(&format!(
-            "[tr][td]{label}[/td][td]{dur}[/td][td]{}[/td][td]{}[/td][td]{}[/td][td]{}[/td][td]{}[/td][td]{}[/td][/tr]\n",
+            "[tr][td]{label}[/td]{fmt_col}[td]{dur}[/td][td]{}[/td][td]{}[/td][td]{}[/td][td]{}[/td][td]{}[/td][td]{}[/td][/tr]\n",
             l.map(|l| format!("{:.1} LUFS", l.integrated_lufs)).unwrap_or_else(|| "—".into()),
             l.map(|l| format!("{:.1} LU", l.lra_lu)).unwrap_or_else(|| "—".into()),
             l.and_then(|l| l.true_peak_dbtp).map(|v| format!("{v:.1} dBTP")).unwrap_or_else(|| "—".into()),
@@ -1459,13 +1535,11 @@ pub fn render_multi(items: &[(AudioAnalysis, ReportContext)]) -> String {
     }
     table.push_str("[/table]");
 
-    let first = &items[0].0;
-    let mut header = format!(
-        "{} · {} · {} kHz",
-        first.codec_label,
-        first.layout_label,
-        first.sample_rate as f64 / 1000.0
-    );
+    let mut header = if uniform {
+        format_summary(&items[0].0)
+    } else {
+        "formatos variados".to_string()
+    };
     if let Some(fps) = items[0]
         .1
         .fps
@@ -1528,21 +1602,27 @@ pub fn render_report(items: &[(AudioAnalysis, ReportContext)]) -> Option<String>
 fn episode_label(path: &Path) -> Option<String> {
     let name = path.file_stem()?.to_string_lossy().to_string();
     let re = regex::Regex::new(r"(?i)S\d{1,2}E\d{1,3}(?:-?E\d{1,3})?").ok()?;
-    re.find(&name).map(|m| m.as_str().to_ascii_uppercase())
+    // O sufixo gerado no empacotamento fica no fim ("Série S01E01 - S01E02"): usa a última ocorrência.
+    re.find_iter(&name)
+        .last()
+        .map(|m| m.as_str().to_ascii_uppercase())
 }
 
-/// Arquivos de áudio do pacote, na ordem em que foram criados.
+/// Arquivos de áudio do pacote, na ordem em que foram criados (sem repetições: se dois
+/// vídeos gravaram no mesmo destino, o arquivo é analisado uma vez e sem referência de duração).
 pub fn package_audio_files(pkg: &PackageOutput) -> Vec<PathBuf> {
-    pkg.created_files
-        .iter()
-        .filter(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .and_then(AudioCodec::from_extension)
-                .is_some()
-        })
-        .cloned()
-        .collect()
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in &pkg.created_files {
+        let is_audio = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(AudioCodec::from_extension)
+            .is_some();
+        if is_audio && !out.contains(p) {
+            out.push(p.clone());
+        }
+    }
+    out
 }
 
 /// Analisa todos os áudios do pacote e devolve o BBCode do relatório.
@@ -1612,6 +1692,7 @@ pub fn attach_package_report<FLog: FnMut(String)>(
     }
     let refs = reference_durations(cfg, reference_videos, cancel);
     match build_package_report(cfg, pkg, fps, &refs, cancel, &mut log) {
+        Ok(_) if cancel.is_cancelled() => bail!("Tarefa cancelada pelo usuário."),
         Ok(report) => {
             if report.is_some() {
                 log("Análise de áudio concluída e adicionada à descrição.".into());
@@ -1629,18 +1710,44 @@ pub fn attach_package_report<FLog: FnMut(String)>(
     }
 }
 
-/// Substitui um relatório anterior na descrição (se houver) ou anexa ao final.
-pub fn upsert_report(description: &mut String, previous: Option<&str>, report: &str) {
-    if let Some(prev) = previous.filter(|p| !p.is_empty()) {
-        if description.contains(prev) {
-            *description = description.replacen(prev, report, 1);
-            return;
-        }
+/// Localiza o relatório gerado na descrição: do título `[b]Análise de Áudio[/b]` até a
+/// próxima linha em branco (o relatório nunca contém linhas em branco). Sobrevive a edições
+/// dentro do bloco, ao contrário de procurar o texto original.
+fn report_section(description: &str) -> Option<(usize, usize)> {
+    let start = description.find(&format!("[b]{REPORT_TITLE}[/b]"))?;
+    let rest = &description[start..];
+    let end = regex::Regex::new(r"\r?\n[ \t]*\r?\n")
+        .ok()?
+        .find(rest)
+        .map(|m| start + m.start())
+        .unwrap_or(description.len());
+    Some((start, end))
+}
+
+/// Substitui o relatório existente na descrição (mesmo editado) ou anexa ao final.
+pub fn upsert_report(description: &mut String, report: &str) {
+    if let Some((start, end)) = report_section(description) {
+        description.replace_range(start..end, report);
+        return;
     }
     if !description.trim().is_empty() {
         description.push_str("\n\n");
     }
     description.push_str(report);
+}
+
+/// Remove o relatório gerado (se houver), preservando o restante da descrição.
+pub fn remove_report(description: &mut String) {
+    let Some((start, end)) = report_section(description) else {
+        return;
+    };
+    let before = description[..start].trim_end();
+    let after = description[end..].trim_start();
+    *description = match (before.is_empty(), after.is_empty()) {
+        (true, _) => after.to_string(),
+        (_, true) => before.to_string(),
+        _ => format!("{before}\n\n{after}"),
+    };
 }
 
 #[cfg(test)]
@@ -1882,12 +1989,131 @@ mod tests {
     }
 
     #[test]
-    fn upsert_replaces_previous_report() {
-        let mut d = "Fonte: X\n\nOLD".to_string();
-        upsert_report(&mut d, Some("OLD"), "NEW");
-        assert_eq!(d, "Fonte: X\n\nNEW");
-        upsert_report(&mut d, None, "MORE");
-        assert_eq!(d, "Fonte: X\n\nNEW\n\nMORE");
+    fn upsert_replaces_edited_report_and_remove_keeps_rest() {
+        let old = format!("[b]{REPORT_TITLE}[/b]\n[table]\nlinha editada pelo usuário\n[/table]");
+        let new = format!("[b]{REPORT_TITLE}[/b]\n[table]\nnovo\n[/table]");
+        let mut d = format!("Fonte: X\n\n{old}\n\n[img]espectro[/img]");
+        upsert_report(&mut d, &new);
+        assert_eq!(d, format!("Fonte: X\n\n{new}\n\n[img]espectro[/img]"));
+        assert_eq!(d.matches(REPORT_TITLE).count(), 1);
+
+        // CRLF (descrição vinda de arquivo no Windows)
+        let mut d = format!("Fonte: X\r\n\r\n{old}\r\n\r\nfim");
+        upsert_report(&mut d, &new);
+        assert_eq!(d.matches(REPORT_TITLE).count(), 1);
+        assert!(d.ends_with("fim"));
+
+        let mut d = format!("Fonte: X\n\n{new}\n\n[img]espectro[/img]");
+        remove_report(&mut d);
+        assert_eq!(d, "Fonte: X\n\n[img]espectro[/img]");
+
+        let mut d = "Sem relatório".to_string();
+        remove_report(&mut d);
+        assert_eq!(d, "Sem relatório");
+        upsert_report(&mut d, &new);
+        assert_eq!(d, format!("Sem relatório\n\n{new}"));
+    }
+
+    #[test]
+    fn rendered_reports_have_no_blank_lines() {
+        let a = synth(6, &R51, 20.0, |t, ch| {
+            if ch >= 4 {
+                0.0
+            } else {
+                noise(t, ch as u64 + 1)
+            }
+        });
+        let ctx = ReportContext {
+            reference_duration_secs: Some(30.0),
+            ..Default::default()
+        };
+        let single = render_single(&a, &ctx);
+        let multi = render_multi(&[(a.clone(), ctx.clone()), (a, ctx)]);
+        for r in [single, multi] {
+            assert!(!r.contains("\n\n"), "{r}");
+        }
+    }
+
+    #[test]
+    fn true_peak_flushes_samples_at_end_of_stream() {
+        let mut acc = Accumulator::new(1, 48_000, &[ChannelRole::Center]);
+        for _ in 0..1000 {
+            acc.push(&[0.0]);
+        }
+        acc.push(&[1.0]);
+        acc.push(&[1.0]);
+        let a = acc.finish(AnalysisHeader {
+            file_name: "t".into(),
+            codec_label: "PCM".into(),
+            lossless: true,
+            sample_rate: 48_000,
+            layout_label: "1.0".into(),
+            dialnorm_db: None,
+            loudness: Some(Loudness {
+                integrated_lufs: -20.0,
+                lra_lu: 1.0,
+                true_peak_dbtp: None,
+            }),
+            names: vec!["C".into()],
+            roles: vec![ChannelRole::Center],
+        });
+        let tp = a.loudness.unwrap().true_peak_dbtp.unwrap();
+        assert!(tp > 1.5, "{tp}");
+    }
+
+    #[test]
+    fn layouts_outside_table_are_not_relabelled_as_51() {
+        assert_eq!(layout_label("6.0", 6), "6.0");
+        assert_eq!(layout_label("5.1(side)", 6), "5.1");
+        assert_eq!(layout_label("", 6), "5.1");
+        let m = channel_map("6.0", 6);
+        assert!(m.iter().all(|(_, r)| *r == ChannelRole::Other));
+        assert_eq!(channel_map("6 channels", 6)[3].1, ChannelRole::Lfe);
+    }
+
+    #[test]
+    fn episode_label_uses_generated_suffix() {
+        let p = Path::new("Show S01E01 - S01E02.ac3");
+        assert_eq!(episode_label(p).as_deref(), Some("S01E02"));
+    }
+
+    #[test]
+    fn mixed_season_shows_format_per_row() {
+        let mut flac = synth(2, &[ChannelRole::Left, ChannelRole::Right], 5.0, |t, ch| {
+            noise(t, ch as u64 + 1)
+        });
+        flac.codec_label = "FLAC".into();
+        let ac3 = synth(2, &[ChannelRole::Left, ChannelRole::Right], 5.0, |t, ch| {
+            noise(t, ch as u64 + 1)
+        });
+        let ctx = ReportContext::default();
+        let mixed = render_multi(&[(ac3.clone(), ctx.clone()), (flac, ctx.clone())]);
+        assert!(mixed.contains("[th]Formato[/th]") && mixed.contains("formatos variados"));
+        let uniform = render_multi(&[(ac3.clone(), ctx.clone()), (ac3, ctx)]);
+        assert!(!uniform.contains("[th]Formato[/th]"));
+    }
+
+    #[test]
+    fn duplicated_audio_paths_are_analyzed_once() {
+        let pkg = PackageOutput {
+            output_folder: PathBuf::from("out"),
+            torrent_path: PathBuf::from("x.torrent"),
+            infohash: String::new(),
+            first_audio_path: None,
+            source_mediainfo: String::new(),
+            audio_mediainfo: String::new(),
+            created_files: vec![
+                PathBuf::from("out/Filme.ac3"),
+                PathBuf::from("out/PT-BR (Full).sup"),
+                PathBuf::from("out/Filme.ac3"),
+            ],
+            delay_warnings: Vec::new(),
+            audio_report: None,
+        };
+        assert_eq!(
+            package_audio_files(&pkg),
+            vec![PathBuf::from("out/Filme.ac3")]
+        );
     }
 
     #[test]

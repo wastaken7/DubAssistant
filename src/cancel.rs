@@ -60,6 +60,24 @@ impl CancelHandle {
             *guard = pid;
         }
     }
+
+    /// Registra um processo filho iniciado fora de `run_command_cancellable` para que
+    /// `cancel()` consiga encerrá-lo mesmo enquanto o chamador está bloqueado lendo o pipe.
+    /// O registro é desfeito quando o guard sai de escopo.
+    pub fn track_pid(&self, pid: u32) -> PidGuard<'_> {
+        self.set_pid(Some(pid));
+        PidGuard { handle: self }
+    }
+}
+
+pub struct PidGuard<'a> {
+    handle: &'a CancelHandle,
+}
+
+impl Drop for PidGuard<'_> {
+    fn drop(&mut self) {
+        self.handle.set_pid(None);
+    }
 }
 
 fn kill_process_tree(pid: u32) {
