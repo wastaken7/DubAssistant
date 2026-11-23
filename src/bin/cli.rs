@@ -20,6 +20,7 @@ use dub_assistant::media::extractor::{
 use dub_assistant::media::inspector::{
     inspect_videos, sanitize_mediainfo_paths, scan_extracted_folder,
 };
+use dub_assistant::media::fps::fps_with_detail;
 use dub_assistant::media::spectrogram::generate_audio_spectrogram;
 use dub_assistant::tmdb::client::{guess_search_query_from_name, TmdbClient};
 use std::path::{Path, PathBuf};
@@ -779,7 +780,7 @@ fn run_inspect(
                     "\n[Vídeo #{}] {} | FPS: {} | Capítulos: {}{}",
                     i + 1,
                     v.path.display(),
-                    v.fps.as_deref().unwrap_or("?"),
+                    fps_with_detail(v.fps.as_deref(), v.fps_detail.as_deref()),
                     if v.has_chapters { "Sim" } else { "Não" },
                     v.embedded_tmdb_id
                         .as_deref()
@@ -825,7 +826,7 @@ fn run_inspect(
                 println!(
                     "\n{mark} {} | FPS: {} | Capítulos: {}",
                     t.label,
-                    t.fps.as_deref().unwrap_or("?"),
+                    fps_with_detail(t.fps.as_deref(), t.fps_detail.as_deref()),
                     if t.has_chapters { "Sim" } else { "Não" }
                 );
                 for tr in &t.tracks {

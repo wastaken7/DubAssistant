@@ -5,6 +5,7 @@ use crate::domain::models::{
     UploadMetadata,
 };
 use crate::domain::rules::{classify_audio_codec, sanitize_windows_filename};
+use crate::media::fps::{self, FpsVerdict, ProbeSource};
 use crate::media::inspector::{
     format_channel_count, is_portuguese, is_portuguese_pt, parse_mediainfo_summary, run_mediainfo,
 };
@@ -12,6 +13,7 @@ use crate::torrent::creator::create_private_torrent;
 use anyhow::{bail, Context, Result};
 use regex::Regex;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -110,6 +112,32 @@ fn inspect_bluray_disc(
         bail!("Nenhuma playlist Blu-ray encontrada pelo eac3to em '{}'.", bd_root.display());
     }
 
+    // FPS real de playlists 1080i / 29.97 / 59.94 (podem ser filme com telecine)
+    let m2ts_map = first_m2ts_per_title(&combined);
+    for title in titles.iter_mut().filter(|t| t.duration_secs >= 60) {
+        if cancel.is_cancelled() {
+            bail!("Tarefa cancelada pelo usuário.");
+        }
+        let Some(nominal) = title.fps.as_deref().and_then(fps::parse_fps_value) else {
+            continue;
+        };
+        if !fps::needs_cadence_analysis(nominal) {
+            continue;
+        }
+        let Some(m2ts) = m2ts_map.get(&title.index) else {
+            continue;
+        };
+        let stream = bd_root.join("BDMV").join("STREAM").join(m2ts);
+        if !stream.is_file() {
+            continue;
+        }
+        let verdict = fps::analyze_cadence(cfg, ProbeSource::File(&stream), nominal, None, cancel);
+        apply_fps_verdict(title, verdict);
+    }
+    if cancel.is_cancelled() {
+        bail!("Tarefa cancelada pelo usuário.");
+    }
+
     // Pré-seleciona a playlist principal (mais longa) e auto-seleciona faixas PT-BR
     if let Some((best_idx, _)) = titles
         .iter()
@@ -188,6 +216,7 @@ pub fn parse_eac3to_disc_output(output: &str) -> Vec<DiscTitle> {
                 duration_str: dur_str,
                 duration_secs: dur_secs,
                 fps: None,
+                fps_detail: None,
                 has_chapters: false,
                 chapters_track_id: None,
                 chapters_text: None,
@@ -215,15 +244,7 @@ pub fn parse_eac3to_disc_output(output: &str) -> Vec<DiscTitle> {
                 || low.starts_with("mpeg2")
                 || low.starts_with("avc")
             {
-                if low.contains("24/1.001") {
-                    title.fps = Some("23.976".to_string());
-                } else if low.contains("p24") {
-                    title.fps = Some("24".to_string());
-                } else if low.contains("p25") || low.contains("i50") {
-                    title.fps = Some("25".to_string());
-                } else if low.contains("30/1.001") || low.contains("60/1.001") {
-                    title.fps = Some("29.97".to_string());
-                }
+                title.fps = eac3to_video_fps(&low);
                 title.tracks.push(MediaTrack {
                     id: track_counter,
                     kind: TrackKind::Video,
@@ -448,6 +469,7 @@ fn inspect_dvd_disc(
             duration_str: dur_str,
             duration_secs: dur_secs,
             fps,
+            fps_detail: None,
             has_chapters,
             chapters_track_id: None,
             chapters_text,
@@ -466,6 +488,34 @@ fn inspect_dvd_disc(
     // Filtra vinhetas curtas (< 60s) se houver títulos mais longos
     if titles.iter().any(|t| t.duration_secs >= 60) {
         titles.retain(|t| t.duration_secs >= 60);
+    }
+
+    // O ffprobe sempre informa 29.97 para DVD NTSC (taxa nominal do MPEG-2). Filme com
+    // soft/hard telecine é 23.976 de verdade, então a cadência de cada título é analisada.
+    for title in titles.iter_mut() {
+        if cancel.is_cancelled() {
+            bail!("Tarefa cancelada pelo usuário.");
+        }
+        let Some(nominal) = title.fps.as_deref().and_then(fps::parse_fps_value) else {
+            continue;
+        };
+        if !fps::needs_cadence_analysis(nominal) {
+            continue;
+        }
+        let verdict = fps::analyze_cadence(
+            cfg,
+            ProbeSource::DvdTitle {
+                root: dvd_target,
+                title: title.index,
+            },
+            nominal,
+            Some(title.duration_secs as f64),
+            cancel,
+        );
+        apply_fps_verdict(title, verdict);
+    }
+    if cancel.is_cancelled() {
+        bail!("Tarefa cancelada pelo usuário.");
     }
 
     if let Some((best_idx, _)) = titles
@@ -768,6 +818,54 @@ where
     })
 }
 
+fn apply_fps_verdict(title: &mut DiscTitle, verdict: Option<FpsVerdict>) {
+    if let Some(v) = verdict {
+        title.fps = Some(v.fps);
+        title.fps_detail = Some(v.detail);
+    }
+}
+
+/// Converte a descrição de vídeo do eac3to (ex: `h264/AVC, 1080p24 /1.001 (16:9)`) em FPS.
+/// `i60` / `i50` são taxas de campos: 1080i60 /1.001 = 29.97 frames entrelaçados.
+fn eac3to_video_fps(desc_lower: &str) -> Option<String> {
+    let c: String = desc_lower.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let label = if c.contains("p24/1.001") {
+        "23.976"
+    } else if c.contains("p24") {
+        "24"
+    } else if c.contains("p25") || c.contains("i50") {
+        "25"
+    } else if c.contains("p50") {
+        "50"
+    } else if c.contains("p30/1.001") || c.contains("i60/1.001") {
+        "29.97"
+    } else if c.contains("p60/1.001") {
+        "59.94"
+    } else if c.contains("p30") || c.contains("i60") {
+        "30"
+    } else if c.contains("p60") {
+        "60"
+    } else {
+        return None;
+    };
+    Some(label.to_string())
+}
+
+/// Primeiro `.m2ts` citado no cabeçalho de cada playlist do eac3to (`1) 00001.mpls, 00001.m2ts, 1:52:40`).
+fn first_m2ts_per_title(output: &str) -> HashMap<u32, String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"^\s*(\d+)\)\s+\d{5}\.mpls,\s*(?:\[[^\]]*\]\s*)?(\d{5}\.m2ts)").unwrap()
+    });
+    output
+        .lines()
+        .filter_map(|l| {
+            let caps = re.captures(l)?;
+            Some((caps[1].parse().ok()?, caps[2].to_string()))
+        })
+        .collect()
+}
+
 fn cleanup_eac3to_logs(dir: &Path) {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for entry in rd.flatten() {
@@ -925,5 +1023,20 @@ mod tests {
             .unwrap();
         assert_eq!(por_audio.id, 4);
         assert_eq!(por_audio.allowed_audio_codec, Some(AudioCodec::DtsHdMa));
+
+        let m2ts = first_m2ts_per_title(sample);
+        assert_eq!(m2ts.get(&1).map(String::as_str), Some("00001.m2ts"));
+        assert!(!m2ts.contains_key(&2));
+    }
+
+    #[test]
+    fn test_eac3to_video_fps_variants() {
+        let f = |s: &str| eac3to_video_fps(s);
+        assert_eq!(f("h264/avc, 1080p24 /1.001 (16:9)").as_deref(), Some("23.976"));
+        assert_eq!(f("h264/avc, 1080p24/1.001 (16:9)").as_deref(), Some("23.976"));
+        assert_eq!(f("vc-1, 1080p24 (16:9)").as_deref(), Some("24"));
+        assert_eq!(f("mpeg2, 1080i50 (16:9)").as_deref(), Some("25"));
+        assert_eq!(f("h264/avc, 1080i60 /1.001 (16:9)").as_deref(), Some("29.97"));
+        assert_eq!(f("h264/avc, 720p60 /1.001 (16:9)").as_deref(), Some("59.94"));
     }
 }
