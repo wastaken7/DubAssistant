@@ -41,8 +41,8 @@ const CLIP_EVENTS_ALERT: u64 = 100;
 const SAME_SIGNAL_CORR: f64 = 0.98;
 /// Correlação surround × frontal que caracteriza upmix por cópia.
 const UPMIX_CORR: f64 = 0.90;
-/// Diferença de duração (s) áudio × vídeo que vira alerta.
-const DURATION_ALERT_SECS: f64 = 1.0;
+/// Diferença de duração (s) áudio × vídeo que vira alerta. ~1 s é comum (alinhamento de frames no fim).
+const DURATION_ALERT_SECS: f64 = 2.0;
 /// Em codec lossless, corte abrupto abaixo disto sugere origem lossy.
 const LOSSY_ORIGIN_MAX_HZ: f64 = 19_000.0;
 
