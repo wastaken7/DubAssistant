@@ -6,6 +6,7 @@ use crate::domain::models::{
     Category, ExtractedFolderScan, InspectedDisc, InspectedVideo, PackageOutput, UploadMetadata,
 };
 use crate::imghost::{upload_image, UploadedImage};
+use crate::media::audio_report::attach_package_report;
 use crate::media::disc::{inspect_raw_disc, process_raw_disc_and_package};
 use crate::media::extractor::{
     organize_extracted_folder_and_package, process_videos_and_package,
@@ -223,6 +224,20 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                             let _ = tx_prog.send(WorkerEvent::Progress(p));
                         },
                     )
+                    .and_then(|mut pkg| {
+                        let tx_a = tx.clone();
+                        attach_package_report(
+                            &cfg,
+                            &mut pkg,
+                            &meta.fps,
+                            &videos.iter().map(|v| v.path.clone()).collect::<Vec<_>>(),
+                            &cancel,
+                            move |m| {
+                                let _ = tx_a.send(WorkerEvent::Log(m));
+                            },
+                        )?;
+                        Ok(pkg)
+                    })
                     .map_err(|e| format!("{e:#}"));
                     let _ = tx.send(WorkerEvent::PackageFinished(res));
                 }
@@ -247,6 +262,20 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                             let _ = tx_prog.send(WorkerEvent::Progress(p));
                         },
                     )
+                    .and_then(|mut pkg| {
+                        let tx_a = tx.clone();
+                        attach_package_report(
+                            &cfg,
+                            &mut pkg,
+                            &meta.fps,
+                            &Vec::new(),
+                            &cancel,
+                            move |m| {
+                                let _ = tx_a.send(WorkerEvent::Log(m));
+                            },
+                        )?;
+                        Ok(pkg)
+                    })
                     .map_err(|e| format!("{e:#}"));
                     let _ = tx.send(WorkerEvent::PackageFinished(res));
                 }
@@ -271,6 +300,20 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                             let _ = tx_prog.send(WorkerEvent::Progress(p));
                         },
                     )
+                    .and_then(|mut pkg| {
+                        let tx_a = tx.clone();
+                        attach_package_report(
+                            &cfg,
+                            &mut pkg,
+                            &meta.fps,
+                            &Vec::new(),
+                            &cancel,
+                            move |m| {
+                                let _ = tx_a.send(WorkerEvent::Log(m));
+                            },
+                        )?;
+                        Ok(pkg)
+                    })
                     .map_err(|e| format!("{e:#}"));
                     let _ = tx.send(WorkerEvent::PackageFinished(res));
                 }

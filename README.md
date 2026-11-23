@@ -17,6 +17,12 @@ Aplicativo desktop nativo para facilitar a extração lossless, padronização d
   - Download automático do `.torrent` corrigido via `download_link` da resposta da API com validação Bencode/InfoHash.
   - Injeção automática em **qBittorrent** (WebUI direto ou proxy `qui`), **Transmission**, **Deluge** e **Watch Folder** com mapeamento de caminhos e delay configurável.
 
+- **Análise de Áudio na Descrição** *(ligada por padrão)*:
+  - Após o processamento, cada áudio é decodificado uma única vez (`ffmpeg` + análise em streaming, RAM constante) e um relatório BBCode compacto é anexado à descrição (editável antes do envio).
+  - Mostra formato, duração (com Δ em relação ao vídeo de referência e FPS), loudness EBU R128 (LUFS, LRA, true peak BS.1770), dialnorm de AC3/E-AC3, largura de banda e clipping, com níveis por canal em `[spoiler]`.
+  - Gera `[alert]`/`[note]` apenas quando algo é detectado: surrounds/LFE/central sem sinal, upmix (surround copiando frontal, mono replicado em L/C/R), estéreo dual-mono, surround matricial (Pro Logic), silêncio digital no meio do áudio, diferença de duração, clipping e corte abrupto em codec lossless (indício de transcode).
+  - Temporadas viram uma tabela com uma linha por episódio. Desative em **Análise de áudio na descrição** (GUI), `config-set --audio-report false` ou `upload --no-audio-report`.
+
 ## Ferramentas Externas Recomendadas
 
 O `DubAssistant` detecta automaticamente as ferramentas no `PATH` (ou você pode apontar os caminhos na aba **Configurações**):
@@ -48,6 +54,9 @@ dubassistant-cli dupe-check --title "As Tartarugas Ninja" --codec AC3 --source B
 
 # Processar + dupe-check + espectrograma + upload + injeção no cliente (use --dry-run para testar sem enviar)
 dubassistant-cli upload "Filme.2024.1080p.WEB-DL.mkv" --version streaming --studio "Delart" --spectrogram --dry-run
+
+# Ver o relatório de análise de áudio de um arquivo (faixa 0 = primeira faixa de áudio)
+dubassistant-cli analyze-audio "Filme.mkv" --track 0 --reference "Filme.mkv" --fps 23.976
 
 # Blu-ray raw escolhendo playlist e faixa de áudio específica
 dubassistant-cli upload "D:/Blu-ray/Filme" --playlist 1 --audio-track 4 --version cinema

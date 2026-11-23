@@ -151,6 +151,8 @@ pub struct AppConfig {
     pub default_output_dir: String,
     pub default_anon: bool,
     pub auto_download_and_inject: bool,
+    /// Anexa à descrição um relatório de análise do áudio (loudness, canais, banda, clipping, silêncios).
+    pub audio_report: bool,
     pub torrent_client: TorrentClientConfig,
     pub image_host: ImageHostConfig,
 }
@@ -170,6 +172,7 @@ impl Default for AppConfig {
             default_output_dir: default_output_directory(),
             default_anon: false,
             auto_download_and_inject: true,
+            audio_report: true,
             torrent_client: TorrentClientConfig::default(),
             image_host: ImageHostConfig::default(),
         }

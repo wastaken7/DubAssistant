@@ -339,4 +339,6 @@ pub struct PackageOutput {
     pub audio_mediainfo: String,
     pub created_files: Vec<PathBuf>,
     pub delay_warnings: Vec<String>,
+    /// Relatório BBCode da análise de áudio (preenchido após o empacotamento, se habilitado).
+    pub audio_report: Option<String>,
 }

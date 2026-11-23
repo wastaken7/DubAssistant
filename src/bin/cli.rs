@@ -7,18 +7,24 @@ use dub_assistant::config::{
     config_file_path, load_config, save_config, AppConfig, ImageHostType, TorrentClientType,
 };
 use dub_assistant::domain::models::{
-    AudioCodec, Category, DiscKind, DubVersion, SourceType, TrackKind, UploadMetadata,
+    AudioCodec, Category, DiscKind, DubVersion, InspectedVideo, SourceType, TrackKind, UploadMetadata,
 };
 use dub_assistant::domain::rules::{
     build_official_release_name, detect_source_from_name_and_codec, validate_upload_metadata,
 };
 use dub_assistant::imghost::upload_image;
-use dub_assistant::media::disc::{inspect_raw_disc, process_raw_disc_and_package};
+use dub_assistant::media::disc::{
+    disc_query_name, inspect_raw_disc, process_raw_disc_and_package,
+};
 use dub_assistant::media::extractor::{
     organize_extracted_folder_and_package, process_videos_and_package,
 };
 use dub_assistant::media::inspector::{
     inspect_videos, sanitize_mediainfo_paths, scan_extracted_folder,
+};
+use dub_assistant::media::audio_report::{
+    analyze_audio_file, attach_package_report, probe_duration_secs, render_single, upsert_report,
+    ReportContext,
 };
 use dub_assistant::media::fps::fps_with_detail;
 use dub_assistant::media::spectrogram::generate_audio_spectrogram;
@@ -87,6 +93,20 @@ enum Commands {
         /// Também envia o PNG gerado para o host de imagens configurado
         #[arg(long)]
         upload: bool,
+    },
+    /// Analisa uma faixa de áudio e imprime o relatório BBCode que seria anexado à descrição
+    AnalyzeAudio {
+        /// Arquivo de áudio ou vídeo/container
+        input: PathBuf,
+        /// Índice da faixa de áudio dentro do arquivo (0 = primeira)
+        #[arg(long, default_value_t = 0)]
+        track: usize,
+        /// Vídeo de referência para comparar a duração
+        #[arg(long)]
+        reference: Option<PathBuf>,
+        /// FPS de sincronia a exibir no relatório
+        #[arg(long)]
+        fps: Option<String>,
     },
     /// Processa, empacota (.torrent privado), faz upload para o CapybaraBR e injeta no cliente BitTorrent
     Upload(UploadArgs),
@@ -240,6 +260,9 @@ struct ConfigSetArgs {
     /// Gerar espectrograma automaticamente (true/false)
     #[arg(long)]
     auto_spectrogram: Option<bool>,
+    /// Anexar relatório de análise de áudio à descrição (true/false, padrão true)
+    #[arg(long)]
+    audio_report: Option<bool>,
     /// Duração do espectrograma em segundos (padrão 600)
     #[arg(long)]
     spectrogram_duration: Option<u32>,
@@ -483,6 +506,10 @@ struct UploadArgs {
     /// Não baixa/injeta o .torrent no cliente BitTorrent após o upload
     #[arg(long)]
     no_inject: bool,
+
+    /// Não anexa o relatório de análise de áudio à descrição (sobrescreve config.json)
+    #[arg(long)]
+    no_audio_report: bool,
 }
 
 #[derive(Debug)]
@@ -601,6 +628,7 @@ async fn main() -> Result<()> {
             println!("Arquivo de configuração: {}", path.display());
             println!("Pasta de saída padrão:   {}", cfg.default_output_dir);
             println!("Anônimo padrão:          {}", cfg.default_anon);
+            println!("Análise de áudio:        {}", cfg.audio_report);
             println!("MediaInfo CLI:           {}", tool_status(&cfg.mediainfo_path));
             println!("mkvmerge:                {}", tool_status(&cfg.mkvmerge_path));
             println!("mkvextract:              {}", tool_status(&cfg.mkvextract_path));
@@ -681,6 +709,28 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
+        Commands::AnalyzeAudio {
+            input,
+            track,
+            reference,
+            fps,
+        } => {
+            let started = std::time::Instant::now();
+            let analysis = analyze_audio_file(&cfg, &input, track, &cancel, |_| {})?;
+            let ctx = ReportContext {
+                label: None,
+                reference_duration_secs: reference
+                    .as_deref()
+                    .and_then(|r| probe_duration_secs(&cfg, r, &cancel)),
+                fps,
+            };
+            if cancel.is_cancelled() {
+                bail!("Tarefa cancelada pelo usuário.");
+            }
+            println!("{}", render_single(&analysis, &ctx));
+            eprintln!("\n(análise em {:.1}s)", started.elapsed().as_secs_f64());
+            Ok(())
+        }
         Commands::Upload(args) => run_upload(&mut cfg, args, &cancel).await,
     }
 }
@@ -709,6 +759,9 @@ fn apply_config_set(cfg: &mut AppConfig, a: ConfigSetArgs) -> Result<()> {
     }
     if let Some(u) = a.zipline_url {
         cfg.image_host.custom_url = u;
+    }
+    if let Some(v) = a.audio_report {
+        cfg.audio_report = v;
     }
     if let Some(v) = a.auto_spectrogram {
         cfg.image_host.auto_generate_spectrogram = v;
@@ -1086,8 +1139,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                 }
             }
             meta.source_mediainfo = disc.raw_mediainfo.clone();
-            if let Some(name) = disc.root_dir.file_name() {
-                search_hint = guess_search_query_from_name(&name.to_string_lossy());
+            if let Some(name) = disc_query_name(&disc.root_dir) {
+                search_hint = guess_search_query_from_name(&name);
             }
             disc_opt = Some(disc);
         }
@@ -1270,7 +1323,11 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         out_dir.display()
     );
 
-    let pkg = if let Some(videos) = videos_opt {
+    let reference_videos: Vec<PathBuf> = videos_opt
+        .as_ref()
+        .map(|v: &Vec<InspectedVideo>| v.iter().map(|x| x.path.clone()).collect())
+        .unwrap_or_default();
+    let mut pkg = if let Some(videos) = videos_opt {
         process_videos_and_package(
             cfg,
             &videos,
@@ -1318,6 +1375,16 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         meta.description.push_str(&warn_block);
     }
 
+    // Relatório de análise de áudio (padrão: ligado)
+    if !args.no_audio_report {
+        attach_package_report(cfg, &mut pkg, &meta.fps, &reference_videos, cancel, |m| {
+            println!("  {m}")
+        })?;
+        if let Some(report) = &pkg.audio_report {
+            upsert_report(&mut meta.description, report);
+        }
+    }
+
     // Espectrograma opcional
     if args.spectrogram || cfg.image_host.auto_generate_spectrogram {
         if let Some(audio_path) = &pkg.first_audio_path {
@@ -1359,6 +1426,9 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         println!("  Pasta:    {}", pkg.output_folder.display());
         println!("  Torrent:  {}", pkg.torrent_path.display());
         println!("  InfoHash: {}", pkg.infohash);
+        if !meta.description.trim().is_empty() {
+            println!("  Descrição (BBCode):\n{}", meta.description);
+        }
         return Ok(());
     }
 

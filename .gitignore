@@ -12,6 +12,8 @@ config.json
 *.torrent
 *.log
 mediainfo.txt
+CLAUDE.md
+AGENTS.md
 
 # Saídas temporárias e mídias de teste
 /output/
