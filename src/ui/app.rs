@@ -10,6 +10,7 @@ use crate::domain::rules::{
     validate_upload_metadata,
 };
 use crate::imghost::UploadedImage;
+use crate::media::audio_report::upsert_report;
 use crate::media::{detect_input_kind, DetectedInput};
 use crate::tmdb::client::{guess_search_query_from_name, PosterImage, TmdbDetails, TmdbSearchItem};
 use crate::ui::tabs;
@@ -47,6 +48,8 @@ pub struct CapybaraApp {
     // Estado de processamento / upload
     pub package_output: Option<PackageOutput>,
     pub spectrogram_image: Option<UploadedImage>,
+    /// Último relatório de áudio inserido na descrição (para substituir em vez de duplicar).
+    pub last_audio_report: Option<String>,
     pub upload_result: Option<UploadPipelineResult>,
     pub pending_upload_after_package: bool,
     pub confirm_dupe_override: bool,
@@ -87,6 +90,7 @@ impl CapybaraApp {
             auto_tmdb_search: false,
             package_output: None,
             spectrogram_image: None,
+            last_audio_report: None,
             upload_result: None,
             pending_upload_after_package: false,
             confirm_dupe_override: false,
@@ -130,6 +134,7 @@ impl CapybaraApp {
         self.auto_tmdb_search = false;
         self.package_output = None;
         self.spectrogram_image = None;
+        self.last_audio_report = None;
         self.upload_result = None;
         self.pending_upload_after_package = false;
         self.confirm_dupe_override = false;
@@ -769,6 +774,14 @@ impl CapybaraApp {
                                     self.meta.description.push_str("\n\n");
                                 }
                                 self.meta.description.push_str(&warn_block);
+                            }
+                            if let Some(report) = &out.audio_report {
+                                upsert_report(
+                                    &mut self.meta.description,
+                                    self.last_audio_report.as_deref(),
+                                    report,
+                                );
+                                self.last_audio_report = Some(report.clone());
                             }
                             let auto_spec_audio = if self.config.image_host.auto_generate_spectrogram
                             {

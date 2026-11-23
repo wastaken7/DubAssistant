@@ -1027,6 +1027,15 @@ fn show_process_and_upload_section(app: &mut CapybaraApp, ui: &mut egui::Ui) {
             {
                 let _ = save_config(&app.config);
             }
+            if ui
+                .checkbox(&mut app.config.audio_report, "Análise de áudio na descrição")
+                .on_hover_text(
+                    "Analisa o áudio após o processamento (loudness, canais, banda, clipping, silêncios e duração) e anexa um relatório BBCode compacto à descrição.",
+                )
+                .changed()
+            {
+                let _ = save_config(&app.config);
+            }
         });
 
         ui.add_space(6.0);
