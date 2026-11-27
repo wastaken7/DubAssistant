@@ -49,7 +49,7 @@ dubassistant-cli config-set --capybara-api-key "SUA_CHAVE" --announce "https://c
 # Inspecionar faixas de um vídeo, disco raw (BDMV/VIDEO_TS/.ISO) ou pasta extraída
 dubassistant-cli inspect "Filme.2024.1080p.WEB-DL.mkv"
 
-# Verificar duplicatas no Acervo de Dublagens
+# Verificar duplicatas entre as dublagens pendentes de moderação (as já aprovadas são bloqueadas pelo servidor no envio)
 dubassistant-cli dupe-check --title "As Tartarugas Ninja" --codec AC3 --source Blu-ray
 
 # Processar + dupe-check + espectrograma + upload + injeção no cliente (use --dry-run para testar sem enviar)

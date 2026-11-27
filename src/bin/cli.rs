@@ -65,7 +65,7 @@ enum Commands {
         #[arg(long)]
         extracted: bool,
     },
-    /// Verifica duplicatas no Acervo de Dublagens do CapybaraBR
+    /// Verifica duplicatas entre as dublagens pendentes de moderação do CapybaraBR
     DupeCheck {
         /// Título em PT-BR (ou termo de busca)
         #[arg(long)]
@@ -491,7 +491,7 @@ struct UploadArgs {
     no_skip_checking: bool,
 
     // --- Controle de Execução ---
-    /// Pula verificação de duplicatas no Acervo
+    /// Pula verificação de duplicatas entre as dublagens pendentes
     #[arg(long)]
     skip_dupe_check: bool,
 
@@ -681,9 +681,9 @@ async fn main() -> Result<()> {
                 .check_pending_dupes(&title, &original, &tmdb, &codec, &source)
                 .await?;
             if dupes.is_empty() {
-                println!("Nenhuma dublagem existente encontrada no Acervo.");
+                println!("Nenhuma dublagem pendente encontrada para este título.");
             } else {
-                println!("Encontradas {} dublagem(ns) no Acervo:", dupes.len());
+                println!("Encontradas {} dublagem(ns) pendente(s):", dupes.len());
                 for d in dupes {
                     let tag = if d.likely_same_release {
                         "[POSSÍVEL DUPLICATA]"
@@ -1291,7 +1291,7 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                 .await
             {
                 Ok(dupes) if dupes.is_empty() => {
-                    println!("  -> OK: nenhuma duplicata encontrada.");
+                    println!("  -> OK: nenhuma duplicata pendente encontrada.");
                 }
                 Ok(dupes) => {
                     let has_exact = dupes.iter().any(|d| d.likely_same_release);
@@ -1304,7 +1304,7 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                         println!("  {tag} {}", d.title);
                     }
                     if has_exact && !args.force {
-                        bail!("Possível duplicata encontrada no Acervo. Revise acima ou use --force para continuar.");
+                        bail!("Possível duplicata encontrada entre as dublagens pendentes. Revise acima ou use --force para continuar.");
                     }
                 }
                 Err(e) => {
