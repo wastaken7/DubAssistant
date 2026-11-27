@@ -1203,8 +1203,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
     if let Some(c) = args.codec {
         meta.audio_codec = c.into();
     }
-    if let Some(b) = args.bitrate {
-        meta.bitrate_kbps = b;
+    if let Some(b) = &args.bitrate {
+        meta.bitrate_kbps = b.clone();
     }
     if let Some(ch) = args.channels {
         meta.channels = ch;
@@ -1275,6 +1275,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         meta.year = y;
     }
 
+    // Nome ou bitrate explícitos não são corrigidos pelo bitrate medido após a extração.
+    meta.manual_name_override = args.name.is_some() || args.bitrate.is_some();
     meta.release_name = match args.name {
         Some(custom) => custom,
         None => build_official_release_name(&meta),
@@ -1372,6 +1374,13 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         bail!("Estado interno inválido: nenhuma entrada carregada.");
     };
 
+    if let Some(kbps) = &pkg.measured_bitrate_kbps {
+        meta.bitrate_kbps = kbps.clone();
+    }
+    if let Some(name) = &pkg.corrected_release_name {
+        meta.release_name = name.clone();
+        println!("  -> Nome oficial corrigido: {}", meta.release_name);
+    }
     if args.mediainfo_file.is_none() && !pkg.source_mediainfo.is_empty() {
         meta.source_mediainfo = pkg.source_mediainfo.clone();
     }

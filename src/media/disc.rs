@@ -1,10 +1,12 @@
 use crate::cancel::{run_command_cancellable, CancelHandle};
 use crate::config::AppConfig;
 use crate::domain::models::{
-    Category, DiscKind, DiscTitle, InspectedDisc, MediaTrack, PackageOutput, TrackKind,
-    UploadMetadata,
+    AudioCodec, Category, DiscKind, DiscTitle, InspectedDisc, MediaTrack, PackageOutput,
+    TrackKind, UploadMetadata,
 };
-use crate::domain::rules::{classify_audio_codec, sanitize_windows_filename};
+use crate::domain::rules::{
+    build_official_release_name, classify_audio_codec, sanitize_windows_filename,
+};
 use crate::media::fps::{self, FpsVerdict, ProbeSource};
 use crate::media::inspector::{
     format_channel_count, is_portuguese, is_portuguese_pt, parse_mediainfo_summary, run_mediainfo,
@@ -565,8 +567,8 @@ where
         bail!("Selecione pelo menos 1 playlist/título do disco na aba 1.");
     }
 
-    let safe_root_name = sanitize_windows_filename(&meta.release_name);
-    let out_folder = output_base_dir.join(&safe_root_name);
+    let mut safe_root_name = sanitize_windows_filename(&meta.release_name);
+    let mut out_folder = output_base_dir.join(&safe_root_name);
     if out_folder.exists() {
         std::fs::remove_dir_all(&out_folder)?;
     }
@@ -574,6 +576,8 @@ where
 
     let mut created_files = Vec::new();
     let mut first_audio: Option<PathBuf> = None;
+    // (codec, duração do título, bitrate já conhecido na inspeção?) do primeiro áudio extraído
+    let mut first_audio_info: Option<(AudioCodec, u64, bool)> = None;
     let total_steps = (selected_titles.len() as f32) + 1.0;
 
     for (idx, title) in selected_titles.iter().enumerate() {
@@ -681,6 +685,8 @@ where
 
                 if first_audio.is_none() {
                     first_audio = Some(audio_dest.clone());
+                    first_audio_info =
+                        Some((codec, title.duration_secs, audio_track.bitrate_kbps.is_some()));
                 }
                 created_files.push(audio_dest);
                 for sp in sub_paths {
@@ -795,6 +801,8 @@ where
 
                 if first_audio.is_none() {
                     first_audio = Some(audio_dest.clone());
+                    first_audio_info =
+                        Some((codec, title.duration_secs, audio_track.bitrate_kbps.is_some()));
                 }
                 created_files.push(audio_dest);
 
@@ -835,6 +843,62 @@ where
         on_progress(((idx + 1) as f32 / total_steps) * 0.85);
     }
 
+    // MediaInfo do áudio extraído
+    let mut audio_mediainfo = if let Some(audio_path) = &first_audio {
+        log("Gerando MediaInfo do áudio extraído...".into());
+        run_mediainfo(cfg, audio_path, cancel)?
+    } else {
+        String::new()
+    };
+
+    // No Blu-ray nem o eac3to nem o MediaInfo da playlist informam o bitrate das faixas
+    // (DTS-HD MA / TrueHD são VBR), então o nome foi montado com o bitrate padrão do
+    // formulário. Mede o bitrate real do áudio extraído e corrige o nome antes do .torrent.
+    let mut measured_bitrate_kbps: Option<String> = None;
+    let mut corrected_release_name: Option<String> = None;
+    if let (Some(audio_path), Some((codec, duration_secs, false))) =
+        (first_audio.clone(), first_audio_info)
+    {
+        let measured = measure_audio_kbps(codec, &audio_mediainfo, &audio_path, duration_secs);
+        let current: String = meta
+            .bitrate_kbps
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
+        if let Some(kbps) = measured.filter(|k| k.to_string() != current) {
+            if meta.manual_name_override {
+                log(format!(
+                    "[AVISO] Bitrate real do áudio extraído: {kbps} kbps (o nome editado manualmente usa '{}'). Ajuste o nome se necessário.",
+                    meta.bitrate_kbps
+                ));
+            } else {
+                let mut fixed = meta.clone();
+                fixed.bitrate_kbps = kbps.to_string();
+                let new_name = build_official_release_name(&fixed);
+                let new_safe = sanitize_windows_filename(&new_name);
+                if new_safe != safe_root_name {
+                    out_folder = rename_package_root(
+                        &out_folder,
+                        &safe_root_name,
+                        &new_safe,
+                        &mut created_files,
+                        &mut first_audio,
+                    )?;
+                    safe_root_name = new_safe;
+                    if let Some(p) = &first_audio {
+                        audio_mediainfo = run_mediainfo(cfg, p, cancel)?;
+                    }
+                }
+                log(format!(
+                    "Bitrate real do áudio extraído: {kbps} kbps (antes: '{}'). Nome corrigido para: {new_name}",
+                    meta.bitrate_kbps
+                ));
+                measured_bitrate_kbps = Some(kbps.to_string());
+                corrected_release_name = Some(new_name);
+            }
+        }
+    }
+
     // Gravar mediainfo.txt da fonte
     let source_mediainfo = if !meta.source_mediainfo.trim().is_empty() {
         meta.source_mediainfo.clone()
@@ -847,14 +911,6 @@ where
         created_files.push(mi_path);
         log("Salvo mediainfo.txt da fonte.".into());
     }
-
-    // MediaInfo do áudio extraído
-    let audio_mediainfo = if let Some(audio_path) = &first_audio {
-        log("Gerando MediaInfo do áudio extraído...".into());
-        run_mediainfo(cfg, audio_path, cancel)?
-    } else {
-        String::new()
-    };
 
     // Criar .torrent privado
     let torrent_path = output_base_dir.join(format!("{safe_root_name}.torrent"));
@@ -884,7 +940,92 @@ where
         created_files,
         delay_warnings: Vec::new(),
         audio_report: None,
+        measured_bitrate_kbps,
+        corrected_release_name,
     })
+}
+
+/// Bitrate médio (kbps) do áudio extraído. DTS-HD MA / TrueHD são VBR e o MediaInfo não
+/// informa o total (no máximo o do núcleo DTS), então usa tamanho do arquivo ÷ duração.
+fn measure_audio_kbps(
+    codec: AudioCodec,
+    audio_mediainfo: &str,
+    audio_path: &Path,
+    duration_secs: u64,
+) -> Option<u32> {
+    if !matches!(codec, AudioCodec::DtsHdMa | AudioCodec::TrueHd) {
+        if let Some(kbps) = parse_mediainfo_summary(audio_mediainfo).audio_bitrate_kbps {
+            return Some(kbps);
+        }
+    }
+    let size = std::fs::metadata(audio_path).ok()?.len();
+    average_kbps(size, duration_secs)
+}
+
+fn average_kbps(size_bytes: u64, duration_secs: u64) -> Option<u32> {
+    if size_bytes == 0 || duration_secs == 0 {
+        return None;
+    }
+    let kbps = (size_bytes as f64 * 8.0 / duration_secs as f64 / 1000.0).round();
+    (kbps >= 1.0).then_some(kbps as u32)
+}
+
+/// Renomeia a pasta do pacote e os arquivos que começam com o nome antigo
+/// (o áudio), atualizando os caminhos em `files` e `first_audio`.
+fn rename_package_root(
+    out_folder: &Path,
+    old_root: &str,
+    new_root: &str,
+    files: &mut [PathBuf],
+    first_audio: &mut Option<PathBuf>,
+) -> Result<PathBuf> {
+    let parent = out_folder
+        .parent()
+        .context("Pasta de saída sem diretório pai")?;
+    let new_folder = parent.join(new_root);
+    // Mesmo critério do início do empacotamento: a pasta de destino é recriada do zero.
+    // Nunca apagar se for a própria pasta (Windows não diferencia maiúsculas).
+    if new_folder.exists() && !old_root.eq_ignore_ascii_case(new_root) {
+        std::fs::remove_dir_all(&new_folder)?;
+    }
+    std::fs::rename(out_folder, &new_folder).with_context(|| {
+        format!(
+            "Falha ao renomear '{}' para '{}'",
+            out_folder.display(),
+            new_folder.display()
+        )
+    })?;
+
+    let remap = |p: &Path| -> Result<PathBuf> {
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let moved = new_folder.join(&name);
+        match name.strip_prefix(old_root) {
+            Some(rest) => {
+                let renamed = new_folder.join(format!("{new_root}{rest}"));
+                std::fs::rename(&moved, &renamed)?;
+                Ok(renamed)
+            }
+            None => Ok(moved),
+        }
+    };
+    for f in files.iter_mut() {
+        *f = remap(f)?;
+    }
+    if let Some(a) = first_audio.as_mut() {
+        // O áudio já foi renomeado no laço acima: só recalcula o caminho.
+        let name = a
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        *a = match name.strip_prefix(old_root) {
+            Some(rest) => new_folder.join(format!("{new_root}{rest}")),
+            None => new_folder.join(name),
+        };
+    }
+    Ok(new_folder)
 }
 
 fn apply_fps_verdict(title: &mut DiscTitle, verdict: Option<FpsVerdict>) {
@@ -1172,7 +1313,55 @@ mod tests {
         assert_eq!(dvd_frame_height(Some("23.976")), 480);
         assert_eq!(dvd_frame_height(None), 480);
     }
-    use crate::domain::models::AudioCodec;
+    #[test]
+    fn average_kbps_from_size_and_duration() {
+        // Em Ritmo de Fuga (Baby Driver): .dtshd de 2 012 451 892 bytes, playlist 1:52:40
+        assert_eq!(average_kbps(2_012_451_892, 6760), Some(2382));
+        assert_eq!(average_kbps(0, 6760), None);
+        assert_eq!(average_kbps(1000, 0), None);
+    }
+
+    #[test]
+    fn dts_hd_ma_ignores_core_bitrate_from_mediainfo() {
+        let dir = std::env::temp_dir().join(format!("dubassist_kbps_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.dtshd");
+        std::fs::write(&f, vec![0u8; 300_000]).unwrap();
+        let mi = "Audio\nFormat : DTS XLL\nBit rate : 1 509 kb/s\n";
+        assert_eq!(measure_audio_kbps(AudioCodec::DtsHdMa, mi, &f, 1), Some(2400));
+        assert_eq!(measure_audio_kbps(AudioCodec::Ac3, mi, &f, 1), Some(1509));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_package_root_moves_folder_and_prefixed_files() {
+        let base = std::env::temp_dir().join(format!("dubassist_ren_{}", std::process::id()));
+        let old = base.join("Filme 2017 DTS-HD MA 640 5.1 Blu-ray");
+        std::fs::create_dir_all(&old).unwrap();
+        let audio = old.join("Filme 2017 DTS-HD MA 640 5.1 Blu-ray.dtshd");
+        let sub = old.join("PT-BR (Full).sup");
+        std::fs::write(&audio, b"a").unwrap();
+        std::fs::write(&sub, b"s").unwrap();
+        let mut files = vec![audio.clone(), sub];
+        let mut first = Some(audio);
+        let new_root = "Filme 2017 DTS-HD MA 2382 5.1 Blu-ray";
+        let new = rename_package_root(
+            &old,
+            "Filme 2017 DTS-HD MA 640 5.1 Blu-ray",
+            new_root,
+            &mut files,
+            &mut first,
+        )
+        .unwrap();
+        assert_eq!(new, base.join(new_root));
+        assert!(!old.exists());
+        let expected_audio = new.join(format!("{new_root}.dtshd"));
+        assert!(expected_audio.is_file());
+        assert!(new.join("PT-BR (Full).sup").is_file());
+        assert_eq!(files, vec![expected_audio.clone(), new.join("PT-BR (Full).sup")]);
+        assert_eq!(first, Some(expected_audio));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     #[test]
     fn test_parse_eac3to_disc_output() {

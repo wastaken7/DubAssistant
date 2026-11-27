@@ -255,6 +255,8 @@ where
         created_files,
         delay_warnings,
         audio_report: None,
+        measured_bitrate_kbps: None,
+        corrected_release_name: None,
     })
 }
 
@@ -393,6 +395,8 @@ where
         created_files,
         delay_warnings: Vec::new(),
         audio_report: None,
+        measured_bitrate_kbps: None,
+        corrected_release_name: None,
     })
 }
 

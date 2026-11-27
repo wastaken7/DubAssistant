@@ -776,6 +776,12 @@ impl CapybaraApp {
                     self.busy = false;
                     match res {
                         Ok(out) => {
+                            if let Some(kbps) = &out.measured_bitrate_kbps {
+                                self.meta.bitrate_kbps = kbps.clone();
+                            }
+                            if let Some(name) = &out.corrected_release_name {
+                                self.meta.release_name = name.clone();
+                            }
                             if !out.source_mediainfo.is_empty() {
                                 self.meta.source_mediainfo = out.source_mediainfo.clone();
                             }
