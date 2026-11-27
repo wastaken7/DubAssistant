@@ -7,6 +7,7 @@ use crate::domain::models::{
     TrackKind, UploadMetadata,
 };
 use crate::domain::rules::{extract_episode_tag, sanitize_windows_filename};
+use crate::media::bitrate::fill_missing_bitrate;
 use crate::media::inspector::{is_portuguese_pt, run_mediainfo};
 use crate::torrent::creator::create_private_torrent;
 use anyhow::{bail, Context, Result};
@@ -39,8 +40,8 @@ where
         log("Aviso: apenas 1 episódio selecionado em modo Série (o site exige temporada completa).".into());
     }
 
-    let safe_root_name = sanitize_windows_filename(&meta.release_name);
-    let out_folder = output_base_dir.join(&safe_root_name);
+    let mut safe_root_name = sanitize_windows_filename(&meta.release_name);
+    let mut out_folder = output_base_dir.join(&safe_root_name);
     if out_folder.exists() {
         std::fs::remove_dir_all(&out_folder)
             .with_context(|| format!("Falha ao limpar pasta existente: {}", out_folder.display()))?;
@@ -50,6 +51,7 @@ where
     let mut created_files = Vec::new();
     let mut delay_warnings = Vec::new();
     let mut first_extracted_audio: Option<PathBuf> = None;
+    let mut extracted_audios: Vec<(PathBuf, Option<f64>)> = Vec::new();
 
     let extract_weight = 0.80_f32;
     let per_video = extract_weight / (videos.len() as f32);
@@ -182,6 +184,7 @@ where
         if first_extracted_audio.is_none() {
             first_extracted_audio = Some(audio_dest.clone());
         }
+        extracted_audios.push((audio_dest.clone(), None));
         created_files.push(audio_dest);
         for (_, sub_dest) in sub_targets {
             if sub_dest.exists() {
@@ -203,6 +206,22 @@ where
 
     if cancel.is_cancelled() {
         bail!("Tarefa cancelada pelo usuário.");
+    }
+
+    let bitrate_fill = fill_missing_bitrate(
+        cfg,
+        meta,
+        &extracted_audios,
+        &out_folder,
+        &safe_root_name,
+        &mut created_files,
+        &mut first_extracted_audio,
+        cancel,
+        &mut log,
+    )?;
+    if let Some(fill) = &bitrate_fill {
+        out_folder = fill.out_folder.clone();
+        safe_root_name = fill.safe_root_name.clone();
     }
 
     // Gravar mediainfo.txt da fonte (1º vídeo)
@@ -255,6 +274,8 @@ where
         created_files,
         delay_warnings,
         audio_report: None,
+        measured_bitrate_kbps: bitrate_fill.as_ref().map(|f| f.kbps),
+        final_release_name: bitrate_fill.and_then(|f| f.release_name),
     })
 }
 
@@ -286,8 +307,8 @@ where
         ));
     }
 
-    let safe_root_name = sanitize_windows_filename(&meta.release_name);
-    let out_folder = output_base_dir.join(&safe_root_name);
+    let mut safe_root_name = sanitize_windows_filename(&meta.release_name);
+    let mut out_folder = output_base_dir.join(&safe_root_name);
     if out_folder.exists() {
         std::fs::remove_dir_all(&out_folder)?;
     }
@@ -295,6 +316,7 @@ where
 
     let mut created_files = Vec::new();
     let mut first_audio_dest: Option<PathBuf> = None;
+    let mut extracted_audios: Vec<(PathBuf, Option<f64>)> = Vec::new();
 
     for (idx, src_audio) in scan.audio_files.iter().enumerate() {
         if cancel.is_cancelled() {
@@ -322,6 +344,7 @@ where
         if first_audio_dest.is_none() {
             first_audio_dest = Some(dest.clone());
         }
+        extracted_audios.push((dest.clone(), None));
         created_files.push(dest);
         on_progress(((idx + 1) as f32 / (scan.audio_files.len() as f32 + 1.0)) * 0.6);
     }
@@ -347,6 +370,22 @@ where
         log(format!("Copiando capítulos -> {}", fname.to_string_lossy()));
         std::fs::copy(chap, &dest)?;
         created_files.push(dest);
+    }
+
+    let bitrate_fill = fill_missing_bitrate(
+        cfg,
+        meta,
+        &extracted_audios,
+        &out_folder,
+        &safe_root_name,
+        &mut created_files,
+        &mut first_audio_dest,
+        cancel,
+        &mut log,
+    )?;
+    if let Some(fill) = &bitrate_fill {
+        out_folder = fill.out_folder.clone();
+        safe_root_name = fill.safe_root_name.clone();
     }
 
     let source_mediainfo = if !meta.source_mediainfo.trim().is_empty() {
@@ -393,6 +432,8 @@ where
         created_files,
         delay_warnings: Vec::new(),
         audio_report: None,
+        measured_bitrate_kbps: bitrate_fill.as_ref().map(|f| f.kbps),
+        final_release_name: bitrate_fill.and_then(|f| f.release_name),
     })
 }
 

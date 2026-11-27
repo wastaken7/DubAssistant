@@ -2109,6 +2109,8 @@ mod tests {
             ],
             delay_warnings: Vec::new(),
             audio_report: None,
+            measured_bitrate_kbps: None,
+            final_release_name: None,
         };
         assert_eq!(
             package_audio_files(&pkg),

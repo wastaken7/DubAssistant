@@ -5,6 +5,7 @@ use crate::domain::models::{
     UploadMetadata,
 };
 use crate::domain::rules::{classify_audio_codec, sanitize_windows_filename};
+use crate::media::bitrate::fill_missing_bitrate;
 use crate::media::fps::{self, FpsVerdict, ProbeSource};
 use crate::media::inspector::{
     format_channel_count, is_portuguese, is_portuguese_pt, parse_mediainfo_summary, run_mediainfo,
@@ -565,8 +566,8 @@ where
         bail!("Selecione pelo menos 1 playlist/título do disco na aba 1.");
     }
 
-    let safe_root_name = sanitize_windows_filename(&meta.release_name);
-    let out_folder = output_base_dir.join(&safe_root_name);
+    let mut safe_root_name = sanitize_windows_filename(&meta.release_name);
+    let mut out_folder = output_base_dir.join(&safe_root_name);
     if out_folder.exists() {
         std::fs::remove_dir_all(&out_folder)?;
     }
@@ -574,6 +575,7 @@ where
 
     let mut created_files = Vec::new();
     let mut first_audio: Option<PathBuf> = None;
+    let mut extracted_audios: Vec<(PathBuf, Option<f64>)> = Vec::new();
     let total_steps = (selected_titles.len() as f32) + 1.0;
 
     for (idx, title) in selected_titles.iter().enumerate() {
@@ -682,6 +684,7 @@ where
                 if first_audio.is_none() {
                     first_audio = Some(audio_dest.clone());
                 }
+                extracted_audios.push((audio_dest.clone(), Some(title.duration_secs as f64)));
                 created_files.push(audio_dest);
                 for sp in sub_paths {
                     if sp.exists() {
@@ -796,6 +799,7 @@ where
                 if first_audio.is_none() {
                     first_audio = Some(audio_dest.clone());
                 }
+                extracted_audios.push((audio_dest.clone(), Some(title.duration_secs as f64)));
                 created_files.push(audio_dest);
 
                 let frame_height = dvd_frame_height(title.fps.as_deref());
@@ -833,6 +837,22 @@ where
         }
 
         on_progress(((idx + 1) as f32 / total_steps) * 0.85);
+    }
+
+    let bitrate_fill = fill_missing_bitrate(
+        cfg,
+        meta,
+        &extracted_audios,
+        &out_folder,
+        &safe_root_name,
+        &mut created_files,
+        &mut first_audio,
+        cancel,
+        &mut log,
+    )?;
+    if let Some(fill) = &bitrate_fill {
+        out_folder = fill.out_folder.clone();
+        safe_root_name = fill.safe_root_name.clone();
     }
 
     // Gravar mediainfo.txt da fonte
@@ -884,6 +904,8 @@ where
         created_files,
         delay_warnings: Vec::new(),
         audio_report: None,
+        measured_bitrate_kbps: bitrate_fill.as_ref().map(|f| f.kbps),
+        final_release_name: bitrate_fill.and_then(|f| f.release_name),
     })
 }
 

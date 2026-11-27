@@ -341,4 +341,8 @@ pub struct PackageOutput {
     pub delay_warnings: Vec<String>,
     /// Relatório BBCode da análise de áudio (preenchido após o empacotamento, se habilitado).
     pub audio_report: Option<String>,
+    /// Bitrate médio calculado após a extração quando a fonte não informava (lossless/VBR).
+    pub measured_bitrate_kbps: Option<u32>,
+    /// Nome oficial atualizado com o bitrate calculado (pasta/arquivos já renomeados).
+    pub final_release_name: Option<String>,
 }

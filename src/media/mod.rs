@@ -1,4 +1,5 @@
 pub mod audio_report;
+pub mod bitrate;
 pub mod disc;
 pub mod extractor;
 pub mod fps;

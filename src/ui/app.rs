@@ -458,9 +458,8 @@ impl CapybaraApp {
                                     if let Some(c) = audio.allowed_audio_codec {
                                         self.meta.audio_codec = c;
                                     }
-                                    if let Some(kbps) = audio.bitrate_kbps {
-                                        self.meta.bitrate_kbps = kbps.to_string();
-                                    }
+                                    // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+                                    self.meta.bitrate_kbps = audio.bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
                                     if let Some(ch) = &audio.channels {
                                         self.meta.channels = ch.clone();
                                     }
@@ -563,9 +562,8 @@ impl CapybaraApp {
                             ) {
                                 self.meta.source = detected_src;
                             }
-                            if let Some(kbps) = scan.detected_bitrate_kbps {
-                                self.meta.bitrate_kbps = kbps.to_string();
-                            }
+                            // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+                            self.meta.bitrate_kbps = scan.detected_bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
                             if let Some(ch) = &scan.detected_channels {
                                 self.meta.channels = ch.clone();
                             }
@@ -636,9 +634,8 @@ impl CapybaraApp {
                                     if let Some(c) = audio.allowed_audio_codec {
                                         self.meta.audio_codec = c;
                                     }
-                                    if let Some(kbps) = audio.bitrate_kbps {
-                                        self.meta.bitrate_kbps = kbps.to_string();
-                                    }
+                                    // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+                                    self.meta.bitrate_kbps = audio.bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
                                     if let Some(ch) = &audio.channels {
                                         self.meta.channels = ch.clone();
                                     }
@@ -776,6 +773,13 @@ impl CapybaraApp {
                     self.busy = false;
                     match res {
                         Ok(out) => {
+                            if let Some(kbps) = out.measured_bitrate_kbps {
+                                self.meta.bitrate_kbps = kbps.to_string();
+                                self.push_log(format!("Bitrate médio calculado: {kbps} kbps."));
+                            }
+                            if let Some(name) = &out.final_release_name {
+                                self.meta.release_name = name.clone();
+                            }
                             if !out.source_mediainfo.is_empty() {
                                 self.meta.source_mediainfo = out.source_mediainfo.clone();
                             }

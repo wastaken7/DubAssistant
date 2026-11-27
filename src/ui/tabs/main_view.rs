@@ -264,9 +264,8 @@ fn show_video_summary_and_tracks(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                 if let Some(c) = audio.allowed_audio_codec {
                     app.meta.audio_codec = c;
                 }
-                if let Some(kbps) = audio.bitrate_kbps {
-                    app.meta.bitrate_kbps = kbps.to_string();
-                }
+                // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+                app.meta.bitrate_kbps = audio.bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
                 if let Some(ch) = &audio.channels {
                     app.meta.channels = ch.clone();
                 }
@@ -393,9 +392,8 @@ fn show_raw_disc_summary_and_tracks(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                 if let Some(c) = audio.allowed_audio_codec {
                     app.meta.audio_codec = c;
                 }
-                if let Some(kbps) = audio.bitrate_kbps {
-                    app.meta.bitrate_kbps = kbps.to_string();
-                }
+                // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+                app.meta.bitrate_kbps = audio.bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
                 if let Some(ch) = &audio.channels {
                     app.meta.channels = ch.clone();
                 }

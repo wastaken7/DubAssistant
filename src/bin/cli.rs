@@ -1055,9 +1055,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                     if let Some(c) = audio.allowed_audio_codec {
                         meta.audio_codec = c;
                     }
-                    if let Some(kbps) = audio.bitrate_kbps {
-                        meta.bitrate_kbps = kbps.to_string();
-                    }
+                    // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+                    meta.bitrate_kbps = audio.bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
                     if let Some(ch) = &audio.channels {
                         meta.channels = ch.clone();
                     }
@@ -1141,9 +1140,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                     if let Some(c) = audio.allowed_audio_codec {
                         meta.audio_codec = c;
                     }
-                    if let Some(kbps) = audio.bitrate_kbps {
-                        meta.bitrate_kbps = kbps.to_string();
-                    }
+                    // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+                    meta.bitrate_kbps = audio.bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
                     if let Some(ch) = &audio.channels {
                         meta.channels = ch.clone();
                     }
@@ -1164,9 +1162,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
             if let Some(c) = scan.detected_codec {
                 meta.audio_codec = c;
             }
-            if let Some(kbps) = scan.detected_bitrate_kbps {
-                meta.bitrate_kbps = kbps.to_string();
-            }
+            // Sem bitrate detectado (lossless/VBR, ex: DTS-HD MA): limpa o campo em vez de manter o 640 padrão
+            meta.bitrate_kbps = scan.detected_bitrate_kbps.map(|k| k.to_string()).unwrap_or_default();
             if let Some(ch) = &scan.detected_channels {
                 meta.channels = ch.clone();
             }
@@ -1372,6 +1369,13 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         bail!("Estado interno inválido: nenhuma entrada carregada.");
     };
 
+    if let Some(kbps) = pkg.measured_bitrate_kbps {
+        meta.bitrate_kbps = kbps.to_string();
+    }
+    if let Some(name) = &pkg.final_release_name {
+        println!("  Nome final com bitrate calculado: {name}");
+        meta.release_name = name.clone();
+    }
     if args.mediainfo_file.is_none() && !pkg.source_mediainfo.is_empty() {
         meta.source_mediainfo = pkg.source_mediainfo.clone();
     }
