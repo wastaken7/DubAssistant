@@ -93,9 +93,7 @@ fn kill_process_tree(pid: u32) {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status();
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
     }
 }
 

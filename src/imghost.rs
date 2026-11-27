@@ -27,7 +27,10 @@ impl UploadedImage {
 
 pub async fn upload_image(image_path: &Path, cfg: &ImageHostConfig) -> Result<UploadedImage> {
     if !image_path.is_file() {
-        bail!("Imagem não encontrada para upload: {}", image_path.display());
+        bail!(
+            "Imagem não encontrada para upload: {}",
+            image_path.display()
+        );
     }
     let bytes = std::fs::read(image_path)
         .with_context(|| format!("Falha ao ler imagem: {}", image_path.display()))?;
@@ -46,7 +49,16 @@ pub async fn upload_image(image_path: &Path, cfg: &ImageHostConfig) -> Result<Up
     let mut failures: Vec<String> = Vec::new();
     for host in order {
         let key = cfg.key_for(host);
-        match upload_to(&client, host, bytes.clone(), &filename, key, &cfg.custom_url).await {
+        match upload_to(
+            &client,
+            host,
+            bytes.clone(),
+            &filename,
+            key,
+            &cfg.custom_url,
+        )
+        .await
+        {
             Ok(mut up) => {
                 up.failures = failures;
                 return Ok(up);
@@ -57,8 +69,10 @@ pub async fn upload_image(image_path: &Path, cfg: &ImageHostConfig) -> Result<Up
     bail!(
         "Falha ao enviar a imagem em todos os hosts tentados:
 {}",
-        failures.join("
-")
+        failures.join(
+            "
+"
+        )
     )
 }
 
@@ -133,11 +147,7 @@ async fn upload_to(
     }
 }
 
-async fn upload_pixhost(
-    client: &Client,
-    bytes: Vec<u8>,
-    filename: &str,
-) -> Result<UploadedImage> {
+async fn upload_pixhost(client: &Client, bytes: Vec<u8>, filename: &str) -> Result<UploadedImage> {
     let part = multipart::Part::bytes(bytes)
         .file_name(filename.to_string())
         .mime_str("image/png")?;
@@ -214,11 +224,7 @@ async fn upload_catbox(
     })
 }
 
-async fn upload_imgbb(
-    client: &Client,
-    bytes: Vec<u8>,
-    key: &str,
-) -> Result<UploadedImage> {
+async fn upload_imgbb(client: &Client, bytes: Vec<u8>, key: &str) -> Result<UploadedImage> {
     let key = key.trim();
     if key.is_empty() {
         bail!("API Key do ImgBB não configurada nas Configurações.");
@@ -262,11 +268,7 @@ async fn upload_imgbb(
     })
 }
 
-async fn upload_lensdump(
-    client: &Client,
-    bytes: Vec<u8>,
-    key: &str,
-) -> Result<UploadedImage> {
+async fn upload_lensdump(client: &Client, bytes: Vec<u8>, key: &str) -> Result<UploadedImage> {
     let key = key.trim();
     if key.is_empty() {
         bail!("API Key do Lensdump não configurada nas Configurações.");

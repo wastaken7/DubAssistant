@@ -28,8 +28,10 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    let initial_paths: Vec<std::path::PathBuf> =
-        std::env::args_os().skip(1).map(std::path::PathBuf::from).collect();
+    let initial_paths: Vec<std::path::PathBuf> = std::env::args_os()
+        .skip(1)
+        .map(std::path::PathBuf::from)
+        .collect();
 
     eframe::run_native(
         "DubAssistant",

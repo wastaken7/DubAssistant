@@ -1,5 +1,6 @@
 use crate::cancel::{run_command_cancellable, CancelHandle};
 use crate::config::AppConfig;
+use crate::media::audio_report::parse_hms;
 use crate::media::configure_no_window;
 use anyhow::{bail, Context, Result};
 use directories::ProjectDirs;
@@ -24,7 +25,17 @@ const DB_MAX: f32 = 0.0;
 struct AudioProbe {
     sample_rate: u32,
     channels: usize,
-    duration_secs: f64,
+    /// `None` quando o ffprobe não está configurado ou não informa a duração.
+    duration_secs: Option<f64>,
+}
+
+/// Texto para logs: "faixa inteira" quando `duration_secs == 0`, senão "Ns".
+pub fn spectrogram_scope_label(duration_secs: u32) -> String {
+    if duration_secs == 0 {
+        "faixa inteira".to_string()
+    } else {
+        format!("{duration_secs}s")
+    }
 }
 
 /// Gera o PNG de espectrograma em **streaming real** (`ffmpeg` decodificando PCM `f32le` via `pipe:1`
@@ -55,11 +66,17 @@ pub fn generate_audio_spectrogram(
     let probe = probe_audio_stream(cfg, audio_path, channels_hint, cancel)?;
     let channels = probe.channels.clamp(1, 8);
     let sample_rate = probe.sample_rate.max(8000);
-    let effective_dur = if duration_secs > 0 {
-        probe.duration_secs.min(duration_secs as f64).max(1.0)
-    } else {
-        probe.duration_secs.max(1.0)
-    };
+    let effective_dur = match (probe.duration_secs, duration_secs) {
+        (Some(d), 0) => d,
+        (Some(d), limit) => d.min(limit as f64),
+        // Sem duração conhecida, o limite pedido é a melhor estimativa do trecho decodificado.
+        (None, limit) if limit > 0 => limit as f64,
+        (None, _) => bail!(
+            "Não foi possível obter a duração de {} via ffprobe para gerar o espectrograma              completo. Configure o ffprobe ou defina uma duração maior que 0.",
+            audio_path.display()
+        ),
+    }
+    .max(1.0);
 
     let panel_h: usize = if channels <= 2 { 340 } else { 240 };
     let total_w = MARGIN_LEFT + PLOT_W + MARGIN_RIGHT;
@@ -251,8 +268,12 @@ pub fn generate_audio_spectrogram(
     let ts = chrono::Utc::now().timestamp();
     let out_path = out_dir.join(format!("{stem}_spec_{ts}.png"));
 
-    img.save(&out_path)
-        .with_context(|| format!("Falha ao salvar PNG do espectrograma: {}", out_path.display()))?;
+    img.save(&out_path).with_context(|| {
+        format!(
+            "Falha ao salvar PNG do espectrograma: {}",
+            out_path.display()
+        )
+    })?;
 
     Ok(out_path)
 }
@@ -269,7 +290,7 @@ fn probe_audio_stream(
         return Ok(AudioProbe {
             sample_rate: 48000,
             channels: fallback_ch,
-            duration_secs: 600.0,
+            duration_secs: None,
         });
     }
 
@@ -312,11 +333,21 @@ fn probe_audio_stream(
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<f64>().ok())
         .or_else(|| {
+            // MKV: duração por faixa fica na tag DURATION (HH:MM:SS.nnnnnnnnn)
+            let tags = audio_stream?.get("tags")?.as_object()?;
+            let raw = tags
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("DURATION"))?
+                .1
+                .as_str()?;
+            parse_hms(raw)
+        })
+        .or_else(|| {
             json.pointer("/format/duration")
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<f64>().ok())
         })
-        .unwrap_or(600.0);
+        .filter(|d| d.is_finite() && *d > 0.0);
 
     Ok(AudioProbe {
         sample_rate,
@@ -343,7 +374,8 @@ fn db_to_rgb(db: f32) -> Rgb<u8> {
         let (t1, c1) = w[1];
         if t <= t1 {
             let f = ((t - t0) / (t1 - t0)).clamp(0.0, 1.0);
-            let lerp = |a: u8, b: u8| -> u8 { (a as f32 + (b as f32 - a as f32) * f).round() as u8 };
+            let lerp =
+                |a: u8, b: u8| -> u8 { (a as f32 + (b as f32 - a as f32) * f).round() as u8 };
             return Rgb([lerp(c0[0], c1[0]), lerp(c0[1], c1[1]), lerp(c0[2], c1[2])]);
         }
     }
@@ -435,7 +467,14 @@ fn draw_overlays(
         let frac = i as f64 / time_ticks as f64;
         let x = MARGIN_LEFT + ((PLOT_W - 1) as f64 * frac).round() as usize;
         let t_lbl = format_hms((duration_secs * frac).round() as u64);
-        draw_text(img, (x as i32) - 18, (bottom_y + 10) as i32, &t_lbl, gray, 1);
+        draw_text(
+            img,
+            (x as i32) - 18,
+            (bottom_y + 10) as i32,
+            &t_lbl,
+            gray,
+            1,
+        );
     }
 
     // Barra de legenda de dB à direita

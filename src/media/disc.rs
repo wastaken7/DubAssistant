@@ -1,8 +1,8 @@
 use crate::cancel::{run_command_cancellable, CancelHandle};
 use crate::config::AppConfig;
 use crate::domain::models::{
-    AudioCodec, Category, DiscKind, DiscTitle, InspectedDisc, MediaTrack, PackageOutput,
-    TrackKind, UploadMetadata,
+    AudioCodec, Category, DiscKind, DiscTitle, InspectedDisc, MediaTrack, PackageOutput, TrackKind,
+    UploadMetadata,
 };
 use crate::domain::rules::{
     build_official_release_name, classify_audio_codec, sanitize_windows_filename,
@@ -111,7 +111,10 @@ fn inspect_bluray_disc(
     );
     let mut titles = parse_eac3to_disc_output(&combined);
     if titles.is_empty() {
-        bail!("Nenhuma playlist Blu-ray encontrada pelo eac3to em '{}'.", bd_root.display());
+        bail!(
+            "Nenhuma playlist Blu-ray encontrada pelo eac3to em '{}'.",
+            bd_root.display()
+        );
     }
 
     // FPS real de playlists 1080i / 29.97 / 59.94 (podem ser filme com telecine)
@@ -335,7 +338,9 @@ fn inspect_dvd_disc(
 ) -> Result<InspectedDisc> {
     let ffprobe = cfg.ffprobe_path.trim();
     if ffprobe.is_empty() {
-        bail!("ffprobe não configurado nas Configurações. Ele é necessário para ler títulos de DVD.");
+        bail!(
+            "ffprobe não configurado nas Configurações. Ele é necessário para ler títulos de DVD."
+        );
     }
 
     let mut titles = Vec::new();
@@ -685,8 +690,11 @@ where
 
                 if first_audio.is_none() {
                     first_audio = Some(audio_dest.clone());
-                    first_audio_info =
-                        Some((codec, title.duration_secs, audio_track.bitrate_kbps.is_some()));
+                    first_audio_info = Some((
+                        codec,
+                        title.duration_secs,
+                        audio_track.bitrate_kbps.is_some(),
+                    ));
                 }
                 created_files.push(audio_dest);
                 for sp in sub_paths {
@@ -801,8 +809,11 @@ where
 
                 if first_audio.is_none() {
                     first_audio = Some(audio_dest.clone());
-                    first_audio_info =
-                        Some((codec, title.duration_secs, audio_track.bitrate_kbps.is_some()));
+                    first_audio_info = Some((
+                        codec,
+                        title.duration_secs,
+                        audio_track.bitrate_kbps.is_some(),
+                    ));
                 }
                 created_files.push(audio_dest);
 
@@ -918,13 +929,10 @@ where
         "Gerando .torrent privado em {}...",
         torrent_path.display()
     ));
-    let created = create_private_torrent(
-        &out_folder,
-        &torrent_path,
-        &cfg.announce_url,
-        cancel,
-        |p| on_progress(0.85 + p * 0.15),
-    )?;
+    let created =
+        create_private_torrent(&out_folder, &torrent_path, &cfg.announce_url, cancel, |p| {
+            on_progress(0.85 + p * 0.15)
+        })?;
     log(format!(
         ".torrent criado! InfoHash: {} ({} bytes de conteúdo)",
         created.infohash, created.total_size
@@ -1038,7 +1046,10 @@ fn apply_fps_verdict(title: &mut DiscTitle, verdict: Option<FpsVerdict>) {
 /// Converte a descrição de vídeo do eac3to (ex: `h264/AVC, 1080p24 /1.001 (16:9)`) em FPS.
 /// `i60` / `i50` são taxas de campos: 1080i60 /1.001 = 29.97 frames entrelaçados.
 fn eac3to_video_fps(desc_lower: &str) -> Option<String> {
-    let c: String = desc_lower.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let c: String = desc_lower
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
     let label = if c.contains("p24/1.001") {
         "23.976"
     } else if c.contains("p24") {
@@ -1138,7 +1149,10 @@ fn extract_vobsub(
     if !out.status.success() || !dest_sub.is_file() || !idx.is_file() {
         bail!(
             "mkvextract não gerou .idx/.sub: {}",
-            String::from_utf8_lossy(&out.stdout).lines().last().unwrap_or("")
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .last()
+                .unwrap_or("")
         );
     }
     let text = std::fs::read_to_string(&idx)?;
@@ -1150,11 +1164,18 @@ fn extract_vobsub(
 }
 
 fn ensure_vobsub_size(idx_text: &str, width: u32, height: u32) -> String {
-    if idx_text.lines().any(|l| l.trim_start().starts_with("size:")) {
+    if idx_text
+        .lines()
+        .any(|l| l.trim_start().starts_with("size:"))
+    {
         return idx_text.to_string();
     }
     let size_line = format!("size: {width}x{height}");
-    let nl = if idx_text.contains("\r\n") { "\r\n" } else { "\n" };
+    let nl = if idx_text.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     match idx_text.split_once(nl) {
         Some((header, rest)) if header.starts_with('#') => {
             format!("{header}{nl}{size_line}{nl}{rest}")
@@ -1328,7 +1349,10 @@ mod tests {
         let f = dir.join("a.dtshd");
         std::fs::write(&f, vec![0u8; 300_000]).unwrap();
         let mi = "Audio\nFormat : DTS XLL\nBit rate : 1 509 kb/s\n";
-        assert_eq!(measure_audio_kbps(AudioCodec::DtsHdMa, mi, &f, 1), Some(2400));
+        assert_eq!(
+            measure_audio_kbps(AudioCodec::DtsHdMa, mi, &f, 1),
+            Some(2400)
+        );
         assert_eq!(measure_audio_kbps(AudioCodec::Ac3, mi, &f, 1), Some(1509));
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1358,7 +1382,10 @@ mod tests {
         let expected_audio = new.join(format!("{new_root}.dtshd"));
         assert!(expected_audio.is_file());
         assert!(new.join("PT-BR (Full).sup").is_file());
-        assert_eq!(files, vec![expected_audio.clone(), new.join("PT-BR (Full).sup")]);
+        assert_eq!(
+            files,
+            vec![expected_audio.clone(), new.join("PT-BR (Full).sup")]
+        );
         assert_eq!(first, Some(expected_audio));
         std::fs::remove_dir_all(&base).unwrap();
     }
@@ -1401,11 +1428,23 @@ mod tests {
     #[test]
     fn test_eac3to_video_fps_variants() {
         let f = |s: &str| eac3to_video_fps(s);
-        assert_eq!(f("h264/avc, 1080p24 /1.001 (16:9)").as_deref(), Some("23.976"));
-        assert_eq!(f("h264/avc, 1080p24/1.001 (16:9)").as_deref(), Some("23.976"));
+        assert_eq!(
+            f("h264/avc, 1080p24 /1.001 (16:9)").as_deref(),
+            Some("23.976")
+        );
+        assert_eq!(
+            f("h264/avc, 1080p24/1.001 (16:9)").as_deref(),
+            Some("23.976")
+        );
         assert_eq!(f("vc-1, 1080p24 (16:9)").as_deref(), Some("24"));
         assert_eq!(f("mpeg2, 1080i50 (16:9)").as_deref(), Some("25"));
-        assert_eq!(f("h264/avc, 1080i60 /1.001 (16:9)").as_deref(), Some("29.97"));
-        assert_eq!(f("h264/avc, 720p60 /1.001 (16:9)").as_deref(), Some("59.94"));
+        assert_eq!(
+            f("h264/avc, 1080i60 /1.001 (16:9)").as_deref(),
+            Some("29.97")
+        );
+        assert_eq!(
+            f("h264/avc, 720p60 /1.001 (16:9)").as_deref(),
+            Some("59.94")
+        );
     }
 }

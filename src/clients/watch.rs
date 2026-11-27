@@ -26,7 +26,11 @@ pub fn copy_to_watch(
     let watch_dir = Path::new(dir);
     std::fs::create_dir_all(watch_dir)?;
     let dest = watch_dir.join(torrent_filename);
-    std::fs::write(&dest, torrent_bytes)
-        .with_context(|| format!("Falha ao gravar .torrent na Watch Folder: {}", dest.display()))?;
+    std::fs::write(&dest, torrent_bytes).with_context(|| {
+        format!(
+            "Falha ao gravar .torrent na Watch Folder: {}",
+            dest.display()
+        )
+    })?;
     Ok(format!("Copiado para Watch Folder: {}", dest.display()))
 }

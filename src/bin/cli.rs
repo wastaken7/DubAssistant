@@ -7,27 +7,26 @@ use dub_assistant::config::{
     config_file_path, load_config, save_config, AppConfig, ImageHostType, TorrentClientType,
 };
 use dub_assistant::domain::models::{
-    AudioCodec, Category, DiscKind, DubVersion, InspectedVideo, SourceType, TrackKind, UploadMetadata,
+    AudioCodec, Category, DiscKind, DubVersion, InspectedVideo, SourceType, TrackKind,
+    UploadMetadata,
 };
 use dub_assistant::domain::rules::{
     build_official_release_name, detect_source_from_name_and_codec, validate_upload_metadata,
 };
 use dub_assistant::imghost::upload_image;
-use dub_assistant::media::disc::{
-    disc_query_name, inspect_raw_disc, process_raw_disc_and_package,
-};
-use dub_assistant::media::extractor::{
-    organize_extracted_folder_and_package, process_videos_and_package,
-};
-use dub_assistant::media::inspector::{
-    inspect_videos, sanitize_mediainfo_paths, scan_extracted_folder,
-};
 use dub_assistant::media::audio_report::{
     analyze_audio_file, attach_package_report, probe_duration_secs, render_single, upsert_report,
     ReportContext,
 };
+use dub_assistant::media::disc::{disc_query_name, inspect_raw_disc, process_raw_disc_and_package};
+use dub_assistant::media::extractor::{
+    organize_extracted_folder_and_package, process_videos_and_package,
+};
 use dub_assistant::media::fps::fps_with_detail;
-use dub_assistant::media::spectrogram::generate_audio_spectrogram;
+use dub_assistant::media::inspector::{
+    inspect_videos, sanitize_mediainfo_paths, scan_extracted_folder,
+};
+use dub_assistant::media::spectrogram::{generate_audio_spectrogram, spectrogram_scope_label};
 use dub_assistant::tmdb::client::{guess_search_query_from_name, TmdbClient};
 use std::path::{Path, PathBuf};
 
@@ -269,7 +268,7 @@ struct ConfigSetArgs {
     /// Anexar relatório de análise de áudio à descrição (true/false, padrão true)
     #[arg(long)]
     audio_report: Option<bool>,
-    /// Duração do espectrograma em segundos (padrão 600)
+    /// Duração do espectrograma em segundos (padrão 0 = faixa inteira)
     #[arg(long)]
     spectrogram_duration: Option<u32>,
     /// Cliente BitTorrent para injeção pós-upload
@@ -635,11 +634,23 @@ async fn main() -> Result<()> {
             println!("Pasta de saída padrão:   {}", cfg.default_output_dir);
             println!("Anônimo padrão:          {}", cfg.default_anon);
             println!("Análise de áudio:        {}", cfg.audio_report);
-            println!("MediaInfo CLI:           {}", tool_status(&cfg.mediainfo_path));
-            println!("mkvmerge:                {}", tool_status(&cfg.mkvmerge_path));
-            println!("mkvextract:              {}", tool_status(&cfg.mkvextract_path));
+            println!(
+                "MediaInfo CLI:           {}",
+                tool_status(&cfg.mediainfo_path)
+            );
+            println!(
+                "mkvmerge:                {}",
+                tool_status(&cfg.mkvmerge_path)
+            );
+            println!(
+                "mkvextract:              {}",
+                tool_status(&cfg.mkvextract_path)
+            );
             println!("ffmpeg:                  {}", tool_status(&cfg.ffmpeg_path));
-            println!("ffprobe:                 {}", tool_status(&cfg.ffprobe_path));
+            println!(
+                "ffprobe:                 {}",
+                tool_status(&cfg.ffprobe_path)
+            );
             println!("eac3to (Blu-ray):        {}", tool_status(&cfg.eac3to_path));
             println!(
                 "Cliente BitTorrent:      {}",
@@ -1218,8 +1229,12 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         meta.source_mediainfo = sanitize_mediainfo_paths(&raw);
     }
     if let Some(ami_file) = &args.audio_mediainfo_file {
-        let raw = std::fs::read_to_string(ami_file)
-            .with_context(|| format!("Falha ao ler --audio-mediainfo-file: {}", ami_file.display()))?;
+        let raw = std::fs::read_to_string(ami_file).with_context(|| {
+            format!(
+                "Falha ao ler --audio-mediainfo-file: {}",
+                ami_file.display()
+            )
+        })?;
         meta.audio_mediainfo = sanitize_mediainfo_paths(&raw);
     }
 
@@ -1409,8 +1424,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
     if args.spectrogram || cfg.image_host.auto_generate_spectrogram {
         if let Some(audio_path) = &pkg.first_audio_path {
             println!(
-                "  Gerando espectrograma via ffmpeg ({}s)...",
-                cfg.image_host.spectrogram_duration_secs
+                "  Gerando espectrograma via ffmpeg ({})...",
+                spectrogram_scope_label(cfg.image_host.spectrogram_duration_secs)
             );
             let png = generate_audio_spectrogram(
                 cfg,
@@ -1517,7 +1532,11 @@ fn apply_cli_track_overrides(
             }
         }
         if let Some(ref sids) = wanted_subs {
-            for t in v.tracks.iter_mut().filter(|t| t.kind == TrackKind::Subtitle) {
+            for t in v
+                .tracks
+                .iter_mut()
+                .filter(|t| t.kind == TrackKind::Subtitle)
+            {
                 t.selected = sids.contains(&t.id);
             }
         }

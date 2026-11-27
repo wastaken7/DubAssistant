@@ -8,11 +8,9 @@ use crate::domain::models::{
 use crate::imghost::{upload_image, UploadedImage};
 use crate::media::audio_report::attach_package_report;
 use crate::media::disc::{inspect_raw_disc, process_raw_disc_and_package};
-use crate::media::extractor::{
-    organize_extracted_folder_and_package, process_videos_and_package,
-};
+use crate::media::extractor::{organize_extracted_folder_and_package, process_videos_and_package};
 use crate::media::inspector::{inspect_videos, scan_extracted_folder};
-use crate::media::spectrogram::generate_audio_spectrogram;
+use crate::media::spectrogram::{generate_audio_spectrogram, spectrogram_scope_label};
 use crate::tmdb::client::{TmdbClient, TmdbDetails, TmdbSearchItem};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -137,7 +135,9 @@ where
     match joined {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(format!("{e:#}")),
-        Err(join_err) if join_err.is_cancelled() => Err("Tarefa cancelada pelo usuário.".to_string()),
+        Err(join_err) if join_err.is_cancelled() => {
+            Err("Tarefa cancelada pelo usuário.".to_string())
+        }
         Err(join_err) => Err(format!("Falha interna na tarefa: {join_err}")),
     }
 }
@@ -326,8 +326,8 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                     let cancel_clone = cancel.clone();
                     let res = run_async_cancellable(&rt, &cancel, async move {
                         let _ = tx_log.send(WorkerEvent::Log(format!(
-                            "Gerando espectrograma via ffmpeg ({}s)...",
-                            cfg.image_host.spectrogram_duration_secs
+                            "Gerando espectrograma via ffmpeg ({})...",
+                            spectrogram_scope_label(cfg.image_host.spectrogram_duration_secs)
                         )));
                         let png_path = tokio::task::spawn_blocking({
                             let cfg_b = cfg.clone();
@@ -446,9 +446,8 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                                         downloaded_torrent_path = Some(dl.path.clone());
                                         download_source = Some(dl.source_used.clone());
 
-                                        let parent_dir = output_folder
-                                            .parent()
-                                            .unwrap_or(&output_folder);
+                                        let parent_dir =
+                                            output_folder.parent().unwrap_or(&output_folder);
                                         let fname = dl
                                             .path
                                             .file_name()
@@ -485,9 +484,8 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                                     Err(e) => {
                                         let err_msg =
                                             format!("Falha ao baixar .torrent via API: {e:#}");
-                                        let _ = tx_log.send(WorkerEvent::Log(format!(
-                                            "[AVISO] {err_msg}"
-                                        )));
+                                        let _ = tx_log
+                                            .send(WorkerEvent::Log(format!("[AVISO] {err_msg}")));
                                         injection_status = Some(err_msg);
                                     }
                                 }

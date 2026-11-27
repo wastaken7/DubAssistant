@@ -130,14 +130,14 @@ pub fn inspect_single_video(
         bail!("Tarefa cancelada pelo usuário.");
     }
 
-    let (mut tracks, has_chapters, ffprobe_tmdb) =
-        if is_mkv && !cfg.mkvmerge_path.trim().is_empty() {
-            let (t, ch) = inspect_with_mkvmerge(cfg, path, cancel)?;
-            let tag = probe_embedded_tmdb_tag(cfg, path, cancel);
-            (t, ch, tag)
-        } else {
-            inspect_with_ffprobe(cfg, path, cancel)?
-        };
+    let (mut tracks, has_chapters, ffprobe_tmdb) = if is_mkv && !cfg.mkvmerge_path.trim().is_empty()
+    {
+        let (t, ch) = inspect_with_mkvmerge(cfg, path, cancel)?;
+        let tag = probe_embedded_tmdb_tag(cfg, path, cancel);
+        (t, ch, tag)
+    } else {
+        inspect_with_ffprobe(cfg, path, cancel)?
+    };
 
     // Enriquecer bitrate/canais/delay com dados do MediaInfo quando faltarem
     enrich_tracks_from_mediainfo(&mut tracks, &raw_mediainfo);
@@ -188,8 +188,7 @@ fn refine_video_fps(
 
     let nominal = fps_label.as_deref().and_then(fps::parse_fps_value);
     if let Some(nominal) = nominal.filter(|n| fps::needs_cadence_analysis(*n)) {
-        if let Some(c) = fps::analyze_cadence(cfg, ProbeSource::File(path), nominal, None, cancel)
-        {
+        if let Some(c) = fps::analyze_cadence(cfg, ProbeSource::File(path), nominal, None, cancel) {
             fps_label = Some(c.fps);
             detail = Some(match detail {
                 Some(d) => format!("{d}; {}", c.detail),
@@ -398,8 +397,8 @@ fn inspect_with_ffprobe(
         bail!("ffprobe falhou: {stderr}");
     }
 
-    let json: Value = serde_json::from_slice(&output.stdout)
-        .context("Falha ao interpretar JSON do ffprobe")?;
+    let json: Value =
+        serde_json::from_slice(&output.stdout).context("Falha ao interpretar JSON do ffprobe")?;
 
     let tmdb_tag = extract_tmdb_from_ffprobe_json(&json);
 
@@ -905,10 +904,7 @@ mod tests {
             parse_tmdb_tag("tv/66732"),
             Some((Some(Category::Series), "66732".to_string()))
         );
-        assert_eq!(
-            parse_tmdb_tag("98566"),
-            Some((None, "98566".to_string()))
-        );
+        assert_eq!(parse_tmdb_tag("98566"), Some((None, "98566".to_string())));
     }
 
     #[test]

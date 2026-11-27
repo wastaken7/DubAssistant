@@ -66,7 +66,10 @@ pub async fn test_connection(cfg: &TorrentClientConfig) -> Result<String> {
         .send()
         .await?;
     let val: Value = resp.json().await?;
-    let ver = val.get("result").and_then(|v| v.as_str()).unwrap_or("WebUI");
+    let ver = val
+        .get("result")
+        .and_then(|v| v.as_str())
+        .unwrap_or("WebUI");
     Ok(format!("Conectado ao Deluge {ver}"))
 }
 
