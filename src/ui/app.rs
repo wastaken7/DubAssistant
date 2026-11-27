@@ -886,12 +886,12 @@ impl CapybaraApp {
                     match &res {
                         Ok(list) if list.is_empty() => {
                             self.push_log(
-                                "Dupe Check: nenhuma dublagem existente encontrada no Acervo.",
+                                "Dupe Check: nenhuma dublagem pendente encontrada para este título.",
                             );
                         }
                         Ok(list) => {
                             self.push_log(format!(
-                                "Dupe Check: {} dublagem(ns) encontrada(s) no Acervo para esta obra.",
+                                "Dupe Check: {} dublagem(ns) pendente(s) encontrada(s) para esta obra.",
                                 list.len()
                             ));
                         }
