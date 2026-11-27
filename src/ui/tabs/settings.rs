@@ -307,7 +307,10 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                 &mut app.config.check_updates,
                 "Verificar nova versão no GitHub ao iniciar",
             );
-            ui.label(format!("(versão atual: v{})", crate::update::CURRENT_VERSION));
+            ui.label(format!(
+                "(versão atual: v{})",
+                crate::update::CURRENT_VERSION
+            ));
         });
     });
 

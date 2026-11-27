@@ -57,7 +57,10 @@ impl BValue {
 pub fn decode(data: &[u8]) -> Result<BValue> {
     let (val, rest) = decode_next(data)?;
     if !rest.is_empty() {
-        bail!("Dados extras após o fim do objeto Bencode ({} bytes)", rest.len());
+        bail!(
+            "Dados extras após o fim do objeto Bencode ({} bytes)",
+            rest.len()
+        );
     }
     Ok(val)
 }

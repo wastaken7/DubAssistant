@@ -15,10 +15,8 @@ use crate::media::disc::disc_query_name;
 use crate::media::{detect_input_kind, DetectedInput};
 use crate::tmdb::client::{guess_search_query_from_name, PosterImage, TmdbDetails, TmdbSearchItem};
 use crate::ui::tabs;
-use crate::worker::{
-    spawn_worker, UploadPipelineResult, WorkerCommand, WorkerEvent, WorkerHandle,
-};
 use crate::update::{spawn_update_check, UpdateInfo, CURRENT_VERSION};
+use crate::worker::{spawn_worker, UploadPipelineResult, WorkerCommand, WorkerEvent, WorkerHandle};
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -193,10 +191,8 @@ impl CapybaraApp {
                         if files.len() > 1 {
                             self.meta.category = Category::Series;
                         }
-                        self.status_banner = Some((
-                            true,
-                            format!("Inspecionando {} vídeo(s)...", files.len()),
-                        ));
+                        self.status_banner =
+                            Some((true, format!("Inspecionando {} vídeo(s)...", files.len())));
                         let _ = self.worker.tx.send(WorkerCommand::InspectVideos {
                             cfg: self.config.clone(),
                             paths: files,
@@ -204,8 +200,10 @@ impl CapybaraApp {
                     }
                     DetectedInput::RawDisc(path) => {
                         self.input_mode = InputMode::RawDisc;
-                        self.status_banner =
-                            Some((true, "Analisando disco raw (BDMV / VIDEO_TS / ISO)...".into()));
+                        self.status_banner = Some((
+                            true,
+                            "Analisando disco raw (BDMV / VIDEO_TS / ISO)...".into(),
+                        ));
                         let _ = self.worker.tx.send(WorkerCommand::InspectRawDisc {
                             cfg: self.config.clone(),
                             path,
@@ -213,8 +211,7 @@ impl CapybaraApp {
                     }
                     DetectedInput::ExtractedFolder(folder) => {
                         self.input_mode = InputMode::ExtractedFolder;
-                        self.status_banner =
-                            Some((true, "Escaneando pasta já extraída...".into()));
+                        self.status_banner = Some((true, "Escaneando pasta já extraída...".into()));
                         let _ = self.worker.tx.send(WorkerCommand::ScanExtractedFolder {
                             cfg: self.config.clone(),
                             folder,
@@ -704,10 +701,8 @@ impl CapybaraApp {
 
                             if let Some((id, cat)) = auto_pick {
                                 self.busy = true;
-                                self.status_banner = Some((
-                                    true,
-                                    format!("Carregando detalhes do TMDB #{id}..."),
-                                ));
+                                self.status_banner =
+                                    Some((true, format!("Carregando detalhes do TMDB #{id}...")));
                                 let _ = self.worker.tx.send(WorkerCommand::FetchTmdbDetails {
                                     api_key: self.config.tmdb_api_key.clone(),
                                     id,
@@ -804,12 +799,12 @@ impl CapybaraApp {
                                 Some(report) => upsert_report(&mut self.meta.description, report),
                                 None => remove_report(&mut self.meta.description),
                             }
-                            let auto_spec_audio = if self.config.image_host.auto_generate_spectrogram
-                            {
-                                out.first_audio_path.clone()
-                            } else {
-                                None
-                            };
+                            let auto_spec_audio =
+                                if self.config.image_host.auto_generate_spectrogram {
+                                    out.first_audio_path.clone()
+                                } else {
+                                    None
+                                };
                             self.package_output = Some(out);
                             self.spectrogram_image = None;
 
@@ -970,11 +965,8 @@ impl eframe::App for CapybaraApp {
                 [poster.width, poster.height],
                 &poster.rgba,
             );
-            self.poster_texture = Some(ctx.load_texture(
-                "tmdb_poster",
-                color_img,
-                egui::TextureOptions::LINEAR,
-            ));
+            self.poster_texture =
+                Some(ctx.load_texture("tmdb_poster", color_img, egui::TextureOptions::LINEAR));
         }
 
         if self.busy {
@@ -1039,7 +1031,11 @@ impl eframe::App for CapybaraApp {
                         );
                         ui.hyperlink_to("Baixar no GitHub", &info.url);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Fechar").on_hover_text("Dispensar aviso").clicked() {
+                            if ui
+                                .small_button("Fechar")
+                                .on_hover_text("Dispensar aviso")
+                                .clicked()
+                            {
                                 dismiss = true;
                             }
                         });

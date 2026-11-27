@@ -128,7 +128,8 @@ pub fn build_official_release_name(meta: &UploadMetadata) -> String {
 /// Remove `_` e `.` indevidos (preservando decimais como `5.1` e `23.976`), colapsa espaços.
 pub fn normalize_title_spaces(input: &str) -> String {
     static RE_NON_DECIMAL_DOT: OnceLock<Regex> = OnceLock::new();
-    let re = RE_NON_DECIMAL_DOT.get_or_init(|| Regex::new(r"(?P<a>[^0-9])\.|\.(?P<b>[^0-9])").unwrap());
+    let re =
+        RE_NON_DECIMAL_DOT.get_or_init(|| Regex::new(r"(?P<a>[^0-9])\.|\.(?P<b>[^0-9])").unwrap());
 
     let replaced_underscores = input.replace('_', " ");
     let mut s = replaced_underscores;
@@ -161,7 +162,9 @@ pub fn sanitize_windows_filename(name: &str) -> String {
             c => out.push(c),
         }
     }
-    let cleaned = collapse_spaces(&out).trim_matches(|c| c == '.' || c == ' ').to_string();
+    let cleaned = collapse_spaces(&out)
+        .trim_matches(|c| c == '.' || c == ' ')
+        .to_string();
     if cleaned.is_empty() {
         "Dublagem".to_string()
     } else {
@@ -191,7 +194,8 @@ pub fn extract_episode_tag(path: &Path) -> Option<(u32, u32, String)> {
         return Some((s, e, format!("S{s:02}E{e:02}")));
     }
 
-    let re_ep = RE_EP.get_or_init(|| Regex::new(r"(?i)\b(?:EP?|Episodio|Episode)[\s._-]*(\d{1,3})\b").unwrap());
+    let re_ep = RE_EP
+        .get_or_init(|| Regex::new(r"(?i)\b(?:EP?|Episodio|Episode)[\s._-]*(\d{1,3})\b").unwrap());
     if let Some(c) = re_ep.captures(&stem) {
         let e: u32 = c[1].parse().ok()?;
         return Some((1, e, format!("E{e:02}")));
@@ -224,7 +228,9 @@ pub fn classify_extracted_file(path: &Path) -> FolderFileClass {
         return FolderFileClass::MediaInfo;
     }
 
-    if ext == "xml" || (ext == "txt" && (file_name.contains("chapter") || file_name.contains("cap"))) {
+    if ext == "xml"
+        || (ext == "txt" && (file_name.contains("chapter") || file_name.contains("cap")))
+    {
         return FolderFileClass::Chapters;
     }
 
@@ -260,7 +266,11 @@ pub fn validate_upload_metadata(meta: &UploadMetadata) -> Vec<String> {
 
     if meta.category == Category::Series {
         if meta.season_number.trim().is_empty()
-            || !meta.season_number.trim().chars().all(|c| c.is_ascii_digit())
+            || !meta
+                .season_number
+                .trim()
+                .chars()
+                .all(|c| c.is_ascii_digit())
         {
             errors.push("Número da temporada é obrigatório para Séries.".to_string());
         }
@@ -375,8 +385,14 @@ mod tests {
     fn test_codec_classification() {
         assert_eq!(classify_audio_codec("A_AC3", None), Some(AudioCodec::Ac3));
         assert_eq!(classify_audio_codec("A_EAC3", None), Some(AudioCodec::Eac3));
-        assert_eq!(classify_audio_codec("A_DTS", Some("DTS-HD MA")), Some(AudioCodec::DtsHdMa));
-        assert_eq!(classify_audio_codec("A_TRUEHD", None), Some(AudioCodec::TrueHd));
+        assert_eq!(
+            classify_audio_codec("A_DTS", Some("DTS-HD MA")),
+            Some(AudioCodec::DtsHdMa)
+        );
+        assert_eq!(
+            classify_audio_codec("A_TRUEHD", None),
+            Some(AudioCodec::TrueHd)
+        );
         assert_eq!(classify_audio_codec("A_MPEG/L3", Some("MP3")), None);
         assert_eq!(classify_audio_codec("A_OPUS", None), None);
     }
@@ -424,7 +440,10 @@ mod tests {
     #[test]
     fn test_detect_source_from_name_and_codec() {
         assert_eq!(
-            detect_source_from_name_and_codec("The.Odyssey.2026.1080p.AMZN.WEB-DL.DDP5.1.mkv", None),
+            detect_source_from_name_and_codec(
+                "The.Odyssey.2026.1080p.AMZN.WEB-DL.DDP5.1.mkv",
+                None
+            ),
             Some(SourceType::Web)
         );
         assert_eq!(

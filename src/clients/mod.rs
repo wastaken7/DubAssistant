@@ -19,7 +19,10 @@ pub fn map_save_path(local_parent_dir: &Path, cfg: &TorrentClientConfig) -> Stri
     }
 
     let norm_local = raw_local.replace('\\', "/");
-    let norm_prefix = local_prefix.replace('\\', "/").trim_end_matches('/').to_string();
+    let norm_prefix = local_prefix
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
 
     let matches = if cfg!(target_os = "windows") {
         norm_local
@@ -81,7 +84,9 @@ pub async fn inject_torrent(
         TorrentClientType::Deluge => {
             deluge::add_torrent(torrent_bytes, torrent_filename, &save_path, cfg).await
         }
-        TorrentClientType::WatchFolder => watch::copy_to_watch(torrent_bytes, torrent_filename, cfg),
+        TorrentClientType::WatchFolder => {
+            watch::copy_to_watch(torrent_bytes, torrent_filename, cfg)
+        }
     }
 }
 

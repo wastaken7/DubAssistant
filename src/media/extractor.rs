@@ -1,6 +1,4 @@
-use crate::cancel::{
-    run_command_cancellable, run_command_cancellable_with_stdout, CancelHandle,
-};
+use crate::cancel::{run_command_cancellable, run_command_cancellable_with_stdout, CancelHandle};
 use crate::config::AppConfig;
 use crate::domain::models::{
     AudioCodec, Category, ExtractedFolderScan, InspectedVideo, MediaTrack, PackageOutput,
@@ -36,14 +34,18 @@ where
         bail!("Nenhum vídeo selecionado para extração.");
     }
     if meta.category == Category::Series && videos.len() < 2 {
-        log("Aviso: apenas 1 episódio selecionado em modo Série (o site exige temporada completa).".into());
+        log(
+            "Aviso: apenas 1 episódio selecionado em modo Série (o site exige temporada completa)."
+                .into(),
+        );
     }
 
     let safe_root_name = sanitize_windows_filename(&meta.release_name);
     let out_folder = output_base_dir.join(&safe_root_name);
     if out_folder.exists() {
-        std::fs::remove_dir_all(&out_folder)
-            .with_context(|| format!("Falha ao limpar pasta existente: {}", out_folder.display()))?;
+        std::fs::remove_dir_all(&out_folder).with_context(|| {
+            format!("Falha ao limpar pasta existente: {}", out_folder.display())
+        })?;
     }
     std::fs::create_dir_all(&out_folder)?;
 
@@ -100,11 +102,7 @@ where
             if delay != 0 {
                 let msg = format!(
                     "Delay detectado em {}: {} ms (informe na descrição conforme regras).",
-                    video
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy(),
+                    video.path.file_name().unwrap_or_default().to_string_lossy(),
                     delay
                 );
                 log(format!("[AVISO] {msg}"));
@@ -233,13 +231,10 @@ where
         "Gerando .torrent privado em {}...",
         torrent_path.display()
     ));
-    let created = create_private_torrent(
-        &out_folder,
-        &torrent_path,
-        &cfg.announce_url,
-        cancel,
-        |p| on_progress(0.85 + p * 0.15),
-    )?;
+    let created =
+        create_private_torrent(&out_folder, &torrent_path, &cfg.announce_url, cancel, |p| {
+            on_progress(0.85 + p * 0.15)
+        })?;
     log(format!(
         ".torrent criado! InfoHash: {} ({} bytes de conteúdo)",
         created.infohash, created.total_size
@@ -376,13 +371,10 @@ where
         "Gerando .torrent privado em {}...",
         torrent_path.display()
     ));
-    let created = create_private_torrent(
-        &out_folder,
-        &torrent_path,
-        &cfg.announce_url,
-        cancel,
-        |p| on_progress(0.75 + p * 0.25),
-    )?;
+    let created =
+        create_private_torrent(&out_folder, &torrent_path, &cfg.announce_url, cancel, |p| {
+            on_progress(0.75 + p * 0.25)
+        })?;
     log(format!(".torrent criado! InfoHash: {}", created.infohash));
 
     Ok(PackageOutput {
@@ -418,7 +410,11 @@ where
     if video.is_mkv && !cfg.mkvextract_path.trim().is_empty() {
         let mut cmd = Command::new(cfg.mkvextract_path.trim());
         cmd.arg(&video.path).arg("--gui-mode").arg("tracks");
-        cmd.arg(format!("{}:{}", audio_track.id, audio_dest.to_string_lossy()));
+        cmd.arg(format!(
+            "{}:{}",
+            audio_track.id,
+            audio_dest.to_string_lossy()
+        ));
         for (sub, dest) in sub_targets {
             cmd.arg(format!("{}:{}", sub.id, dest.to_string_lossy()));
         }
@@ -474,8 +470,7 @@ where
         .arg(dest);
     }
 
-    let out = run_command_cancellable(&mut cmd, cancel)
-        .context("Falha ao executar ffmpeg")?;
+    let out = run_command_cancellable(&mut cmd, cancel).context("Falha ao executar ffmpeg")?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         bail!("ffmpeg falhou ao extrair faixas: {stderr}");
@@ -548,7 +543,10 @@ mod tests {
     fn parses_gui_mode_progress() {
         assert_eq!(parse_mkvextract_progress("#GUI#progress 0%"), Some(0.0));
         assert_eq!(parse_mkvextract_progress("#GUI#progress 42%"), Some(0.42));
-        assert_eq!(parse_mkvextract_progress("  #GUI#progress 100%  "), Some(1.0));
+        assert_eq!(
+            parse_mkvextract_progress("  #GUI#progress 100%  "),
+            Some(1.0)
+        );
     }
 
     #[test]

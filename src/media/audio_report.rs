@@ -334,7 +334,7 @@ pub fn probe_duration_secs(cfg: &AppConfig, path: &Path, cancel: &CancelHandle) 
         })
 }
 
-fn parse_hms(raw: &str) -> Option<f64> {
+pub(crate) fn parse_hms(raw: &str) -> Option<f64> {
     let mut parts = raw.trim().split(':');
     let h: f64 = parts.next()?.parse().ok()?;
     let m: f64 = parts.next()?.parse().ok()?;

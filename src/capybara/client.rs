@@ -146,8 +146,9 @@ impl CapybaraClient {
         meta: &UploadMetadata,
         torrent_path: &Path,
     ) -> Result<UploadResult> {
-        let torrent_bytes = std::fs::read(torrent_path)
-            .with_context(|| format!("Falha ao ler arquivo .torrent: {}", torrent_path.display()))?;
+        let torrent_bytes = std::fs::read(torrent_path).with_context(|| {
+            format!("Falha ao ler arquivo .torrent: {}", torrent_path.display())
+        })?;
         let torrent_filename = torrent_path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
@@ -160,7 +161,10 @@ impl CapybaraClient {
         let mut form = multipart::Form::new()
             .part("torrent", torrent_part)
             .text("name", meta.release_name.trim().to_string())
-            .text("description", build_description_with_signature(&meta.description))
+            .text(
+                "description",
+                build_description_with_signature(&meta.description),
+            )
             .text("category_id", meta.category.id().to_string())
             .text("tmdb_id", meta.tmdb_id.trim().to_string())
             .text("mediainfo", meta.source_mediainfo.clone())
@@ -523,8 +527,9 @@ mod tests {
     #[test]
     fn test_description_signature() {
         let with_body = build_description_with_signature("Fonte: Blu-ray Remux");
-        assert!(with_body
-            .starts_with("Fonte: Blu-ray Remux\n\n[right][url=https://github.com/wastaken7/DubAssistant]"));
+        assert!(with_body.starts_with(
+            "Fonte: Blu-ray Remux\n\n[right][url=https://github.com/wastaken7/DubAssistant]"
+        ));
         assert!(with_body.contains("Compartilhado com DubAssistant"));
 
         let empty = build_description_with_signature("   ");

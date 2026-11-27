@@ -242,8 +242,14 @@ impl Default for AppConfig {
             tmdb_api_key: String::new(),
             ffmpeg_path: detect_binary(&["ffmpeg"]),
             ffprobe_path: detect_binary(&["ffprobe"]),
-            mkvmerge_path: detect_binary(&["mkvmerge", r"C:\Program Files\MKVToolNix\mkvmerge.exe"]),
-            mkvextract_path: detect_binary(&["mkvextract", r"C:\Program Files\MKVToolNix\mkvextract.exe"]),
+            mkvmerge_path: detect_binary(&[
+                "mkvmerge",
+                r"C:\Program Files\MKVToolNix\mkvmerge.exe",
+            ]),
+            mkvextract_path: detect_binary(&[
+                "mkvextract",
+                r"C:\Program Files\MKVToolNix\mkvextract.exe",
+            ]),
             mediainfo_path: detect_binary(&["mediainfo", "MediaInfo"]),
             eac3to_path: detect_binary(&["eac3to"]),
             default_output_dir: default_output_directory(),
@@ -316,10 +322,12 @@ impl AppConfig {
             self.ffprobe_path = detect_binary(&["ffprobe"]);
         }
         if self.mkvmerge_path.trim().is_empty() {
-            self.mkvmerge_path = detect_binary(&["mkvmerge", r"C:\Program Files\MKVToolNix\mkvmerge.exe"]);
+            self.mkvmerge_path =
+                detect_binary(&["mkvmerge", r"C:\Program Files\MKVToolNix\mkvmerge.exe"]);
         }
         if self.mkvextract_path.trim().is_empty() {
-            self.mkvextract_path = detect_binary(&["mkvextract", r"C:\Program Files\MKVToolNix\mkvextract.exe"]);
+            self.mkvextract_path =
+                detect_binary(&["mkvextract", r"C:\Program Files\MKVToolNix\mkvextract.exe"]);
         }
         if self.mediainfo_path.trim().is_empty() {
             self.mediainfo_path = detect_binary(&["mediainfo", "MediaInfo"]);
@@ -364,8 +372,8 @@ fn which_in_path(cmd: &str) -> Option<String> {
         if has_ext {
             vec![String::new()]
         } else {
-            let pathext = std::env::var("PATHEXT")
-                .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string());
+            let pathext =
+                std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string());
             pathext
                 .split(';')
                 .filter(|s| !s.trim().is_empty())

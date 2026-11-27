@@ -194,7 +194,11 @@ fn show_video_summary_and_tracks(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                             egui::RichText::new("Faixas de Áudio (selecione exatamente 1):")
                                 .strong(),
                         );
-                        for t in video.tracks.iter_mut().filter(|t| t.kind == TrackKind::Audio) {
+                        for t in video
+                            .tracks
+                            .iter_mut()
+                            .filter(|t| t.kind == TrackKind::Audio)
+                        {
                             let allowed = t.allowed_audio_codec.is_some();
                             let label = format!(
                                 "ID {} | {} | Idioma: {} | Canais: {} | Bitrate: {} kbps{}{}",
@@ -518,10 +522,7 @@ fn show_metadata_section(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                     app.tmdb_results.len()
                 )
             } else {
-                format!(
-                    "Resultados TMDB ({} encontrado(s))",
-                    app.tmdb_results.len()
-                )
+                format!("Resultados TMDB ({} encontrado(s))", app.tmdb_results.len())
             };
             egui::CollapsingHeader::new(label)
                 .id_salt("tmdb_results_header")
@@ -537,7 +538,10 @@ fn show_metadata_section(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                                 ui.horizontal(|ui| {
                                     let btn_text = if is_current { "Atual" } else { "Selecionar" };
                                     if ui
-                                        .add_enabled(!app.busy && !is_current, egui::Button::new(btn_text))
+                                        .add_enabled(
+                                            !app.busy && !is_current,
+                                            egui::Button::new(btn_text),
+                                        )
                                         .clicked()
                                     {
                                         chosen = Some((item.id, item.category));
@@ -669,10 +673,7 @@ fn show_metadata_section(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                     );
                 }
                 Some(Err(e)) => {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(240, 160, 90),
-                        format!("Aviso: {e}"),
-                    );
+                    ui.colored_label(egui::Color32::from_rgb(240, 160, 90), format!("Aviso: {e}"));
                 }
             }
             if ui
@@ -906,10 +907,7 @@ fn show_metadata_section(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                             .desired_width(210.0)
                             .hint_text("Nota curta (opcional)"),
                     );
-                    if ui
-                        .checkbox(&mut app.meta.anon, "Anônimo")
-                        .changed()
-                    {
+                    if ui.checkbox(&mut app.meta.anon, "Anônimo").changed() {
                         app.config.default_anon = app.meta.anon;
                         let _ = save_config(&app.config);
                     }

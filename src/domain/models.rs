@@ -202,7 +202,12 @@ impl AudioCodec {
     }
 
     pub fn from_extension(ext: &str) -> Option<Self> {
-        match ext.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
+        match ext
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "ac3" => Some(AudioCodec::Ac3),
             "eac3" | "ec3" => Some(AudioCodec::Eac3),
             "dts" => Some(AudioCodec::Dts),

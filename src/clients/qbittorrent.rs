@@ -99,7 +99,10 @@ async fn login_if_direct(client: &Client, base: &str, cfg: &TorrentClientConfig)
     let status = resp.status();
     let body = resp.text().await?;
     if !is_login_response_ok(status, &body) {
-        bail!("Login no qBittorrent falhou (HTTP {status}): {}", body.trim());
+        bail!(
+            "Login no qBittorrent falhou (HTTP {status}): {}",
+            body.trim()
+        );
     }
     Ok(())
 }
@@ -231,7 +234,10 @@ mod tests {
     #[test]
     fn login_response_rejects_failures() {
         assert!(!is_login_response_ok(StatusCode::OK, "Fails."));
-        assert!(!is_login_response_ok(StatusCode::UNAUTHORIZED, "Unauthorized"));
+        assert!(!is_login_response_ok(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized"
+        ));
         assert!(!is_login_response_ok(StatusCode::FORBIDDEN, "Banned"));
     }
 
@@ -263,7 +269,9 @@ mod tests {
         cfg.password = std::env::var("QBT_TEST_PASS").unwrap_or_default();
         cfg.api_key = std::env::var("QBT_TEST_API_KEY").unwrap_or_default();
 
-        let msg = test_connection(&cfg).await.expect("test_connection deve suceder");
+        let msg = test_connection(&cfg)
+            .await
+            .expect("test_connection deve suceder");
         println!("{msg}");
         assert!(msg.contains("Conectado ao qBittorrent"));
     }
