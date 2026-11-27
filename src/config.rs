@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,15 +87,21 @@ pub enum ImageHostType {
     OnlyImage,
     Lensdump,
     Zipline,
+    PtScreens,
+    PassTheImage,
+    LostImg,
 }
 
 impl ImageHostType {
-    pub const ALL: [ImageHostType; 6] = [
+    pub const ALL: [ImageHostType; 9] = [
         ImageHostType::Pixhost,
         ImageHostType::Catbox,
         ImageHostType::ImgBB,
         ImageHostType::OnlyImage,
         ImageHostType::Lensdump,
+        ImageHostType::PtScreens,
+        ImageHostType::PassTheImage,
+        ImageHostType::LostImg,
         ImageHostType::Zipline,
     ];
 
@@ -106,19 +113,44 @@ impl ImageHostType {
             ImageHostType::OnlyImage => "OnlyImage (API Key)",
             ImageHostType::Lensdump => "Lensdump (API Key)",
             ImageHostType::Zipline => "Zipline (URL + API Key)",
+            ImageHostType::PtScreens => "PTScreens (API Key)",
+            ImageHostType::PassTheImage => "PassTheImage (API Key)",
+            ImageHostType::LostImg => "LostImg (API Key)",
         }
     }
 
     pub fn needs_api_key(self) -> bool {
         !matches!(self, ImageHostType::Pixhost | ImageHostType::Catbox)
     }
+
+    /// Stable identifier used as the key in `ImageHostConfig::api_keys`.
+    /// Never change an existing value: it is persisted in config.json.
+    pub fn id(self) -> &'static str {
+        match self {
+            ImageHostType::Pixhost => "pixhost",
+            ImageHostType::Catbox => "catbox",
+            ImageHostType::ImgBB => "imgbb",
+            ImageHostType::OnlyImage => "onlyimage",
+            ImageHostType::Lensdump => "lensdump",
+            ImageHostType::Zipline => "zipline",
+            ImageHostType::PtScreens => "ptscreens",
+            ImageHostType::PassTheImage => "passtheimage",
+            ImageHostType::LostImg => "lostimg",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ImageHostConfig {
+    /// Host tentado primeiro; os demais configurados servem de fallback.
     pub host_type: ImageHostType,
+    /// Campo legado (uma única chave para o host selecionado). Lido apenas para
+    /// migração em `migrate_legacy_key`; nunca é gravado de volta.
+    #[serde(skip_serializing)]
     pub api_key: String,
+    /// API key / userhash por host, indexado por `ImageHostType::id()`.
+    pub api_keys: BTreeMap<String, String>,
     pub custom_url: String,
     pub auto_generate_spectrogram: bool,
     pub spectrogram_duration_secs: u32,
@@ -129,9 +161,52 @@ impl Default for ImageHostConfig {
         Self {
             host_type: ImageHostType::Pixhost,
             api_key: String::new(),
+            api_keys: BTreeMap::new(),
             custom_url: String::new(),
             auto_generate_spectrogram: false,
             spectrogram_duration_secs: 0,
+        }
+    }
+}
+
+impl ImageHostConfig {
+    pub fn key_for(&self, host: ImageHostType) -> &str {
+        self.api_keys.get(host.id()).map(|s| s.trim()).unwrap_or("")
+    }
+
+    pub fn set_key(&mut self, host: ImageHostType, key: impl Into<String>) {
+        self.api_keys.insert(host.id().to_string(), key.into());
+    }
+
+    /// Whether `host` has everything it needs to attempt an upload.
+    pub fn is_usable(&self, host: ImageHostType) -> bool {
+        match host {
+            ImageHostType::Pixhost | ImageHostType::Catbox => true,
+            ImageHostType::Zipline => {
+                !self.custom_url.trim().is_empty() && !self.key_for(host).is_empty()
+            }
+            _ => !self.key_for(host).is_empty(),
+        }
+    }
+
+    /// Upload order: the selected host first, then every other usable host
+    /// in `ImageHostType::ALL` order as fallbacks.
+    pub fn upload_order(&self) -> Vec<ImageHostType> {
+        let mut order = vec![self.host_type];
+        order.extend(
+            ImageHostType::ALL
+                .into_iter()
+                .filter(|h| *h != self.host_type && self.is_usable(*h)),
+        );
+        order
+    }
+
+    /// Moves the legacy single `api_key` to the host that was selected when it
+    /// was saved, without overwriting a per-host key that already exists.
+    pub fn migrate_legacy_key(&mut self) {
+        let legacy = std::mem::take(&mut self.api_key);
+        if !legacy.trim().is_empty() && self.key_for(self.host_type).is_empty() {
+            self.set_key(self.host_type, legacy);
         }
     }
 }
@@ -218,6 +293,7 @@ pub fn load_config() -> AppConfig {
         Ok(content) => {
             let mut cfg: AppConfig = serde_json::from_str(&content).unwrap_or_default();
             cfg.fill_missing_tools();
+            cfg.image_host.migrate_legacy_key();
             cfg
         }
         Err(_) => AppConfig::default(),
@@ -321,4 +397,59 @@ fn which_in_path(cmd: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod image_host_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_key_migrates_to_selected_host_and_is_not_saved() {
+        let json = r#"{"host_type":"ImgBB","api_key":"abc","custom_url":""}"#;
+        let mut ih: ImageHostConfig = serde_json::from_str(json).unwrap();
+        ih.migrate_legacy_key();
+        assert_eq!(ih.key_for(ImageHostType::ImgBB), "abc");
+        assert!(ih.api_key.is_empty());
+        let out = serde_json::to_string(&ih).unwrap();
+        assert!(!out.contains("\"api_key\""));
+        assert!(out.contains("\"imgbb\":\"abc\""));
+    }
+
+    #[test]
+    fn legacy_key_does_not_overwrite_existing_per_host_key() {
+        let json = r#"{"host_type":"ImgBB","api_key":"old","api_keys":{"imgbb":"new"}}"#;
+        let mut ih: ImageHostConfig = serde_json::from_str(json).unwrap();
+        ih.migrate_legacy_key();
+        assert_eq!(ih.key_for(ImageHostType::ImgBB), "new");
+    }
+
+    #[test]
+    fn upload_order_selected_first_then_usable_fallbacks() {
+        let mut ih = ImageHostConfig {
+            host_type: ImageHostType::PtScreens,
+            ..Default::default()
+        };
+        ih.set_key(ImageHostType::PtScreens, "k1");
+        ih.set_key(ImageHostType::LostImg, "k2");
+        ih.set_key(ImageHostType::ImgBB, "  ");
+        ih.set_key(ImageHostType::Zipline, "k3"); // sem URL -> inutilizável
+        assert_eq!(
+            ih.upload_order(),
+            vec![
+                ImageHostType::PtScreens,
+                ImageHostType::Pixhost,
+                ImageHostType::Catbox,
+                ImageHostType::LostImg,
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_host_is_tried_even_without_key() {
+        let ih = ImageHostConfig {
+            host_type: ImageHostType::ImgBB,
+            ..Default::default()
+        };
+        assert_eq!(ih.upload_order()[0], ImageHostType::ImgBB);
+    }
 }

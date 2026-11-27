@@ -222,25 +222,37 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
                     });
                 ui.end_row();
 
-                if ih.host_type == ImageHostType::Zipline {
-                    ui.label("URL do Zipline:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut ih.custom_url)
-                            .desired_width(360.0)
-                            .hint_text("https://seu-zipline/api/upload"),
-                    );
-                    ui.end_row();
-                }
+                ui.label("Fallback:");
+                ui.label(
+                    egui::RichText::new(
+                        "Se o host selecionado falhar, os demais configurados abaixo são tentados em ordem.",
+                    )
+                    .weak(),
+                );
+                ui.end_row();
 
-                if ih.host_type.needs_api_key() || ih.host_type == ImageHostType::Catbox {
-                    let lbl = if ih.host_type == ImageHostType::Catbox {
-                        "Userhash Catbox (opcional):"
+                for ht in ImageHostType::ALL {
+                    if ht == ImageHostType::Pixhost {
+                        continue;
+                    }
+                    if ht == ImageHostType::Zipline {
+                        ui.label("URL do Zipline:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut ih.custom_url)
+                                .desired_width(360.0)
+                                .hint_text("https://seu-zipline/api/upload"),
+                        );
+                        ui.end_row();
+                    }
+                    let lbl = if ht == ImageHostType::Catbox {
+                        "Userhash Catbox (opcional):".to_string()
                     } else {
-                        "API Key do Host:"
+                        format!("API Key {}:", host_short_name(ht))
                     };
                     ui.label(lbl);
+                    let entry = ih.api_keys.entry(ht.id().to_string()).or_default();
                     ui.add(
-                        egui::TextEdit::singleline(&mut ih.api_key)
+                        egui::TextEdit::singleline(entry)
                             .password(true)
                             .desired_width(360.0),
                     );
@@ -321,4 +333,8 @@ fn tool_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
         ui.colored_label(egui::Color32::from_rgb(240, 100, 100), "Não encontrado");
     }
     ui.end_row();
+}
+
+fn host_short_name(ht: ImageHostType) -> &'static str {
+    ht.label().split(" (").next().unwrap_or("")
 }
