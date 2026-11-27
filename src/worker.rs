@@ -1,7 +1,7 @@
 use crate::cancel::CancelHandle;
 use crate::capybara::client::{CapybaraClient, DupeEntry, UploadResult};
-use crate::clients::{inject_torrent, test_connection};
-use crate::config::{AppConfig, TorrentClientConfig};
+use crate::clients::{inject_torrent, remove_torrent_file, test_connection};
+use crate::config::{AppConfig, TorrentClientConfig, TorrentClientType};
 use crate::domain::models::{
     Category, ExtractedFolderScan, InspectedDisc, InspectedVideo, PackageOutput, UploadMetadata,
 };
@@ -415,6 +415,8 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                         ));
                         let upload = client.upload_dublagem(&meta, &torrent_path).await?;
                         let _ = tx_log.send(WorkerEvent::Log(upload.message.clone()));
+                        // Upload real concluído: o .torrent local não é mais necessário.
+                        let _ = tx_log.send(WorkerEvent::Log(remove_torrent_file(&torrent_path)));
 
                         let mut downloaded_torrent_path = None;
                         let mut download_source = None;
@@ -471,6 +473,16 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                                             Ok(msg) => {
                                                 let _ = tx_log.send(WorkerEvent::Log(msg.clone()));
                                                 injection_status = Some(msg);
+                                                // Já injetado no cliente: não deixa o .torrent baixado no output.
+                                                // Sem cliente configurado, o arquivo baixado é o próprio entregável.
+                                                if cfg.torrent_client.client_type
+                                                    != TorrentClientType::None
+                                                {
+                                                    let _ = tx_log.send(WorkerEvent::Log(
+                                                        remove_torrent_file(&dl.path),
+                                                    ));
+                                                    downloaded_torrent_path = None;
+                                                }
                                             }
                                             Err(e) => {
                                                 let err_msg = format!("Erro na injeção: {e:#}");

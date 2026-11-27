@@ -1468,7 +1468,7 @@ pub fn render_single(a: &AudioAnalysis, ctx: &ReportContext) -> String {
         a.sample_rate as f64 / 1000.0,
         if a.lossless { " · lossless" } else { "" }
     );
-    let mut s = format!("[b]{REPORT_TITLE}[/b]\n[table]\n");
+    let mut s = format!("[h2]{REPORT_TITLE}[/h2]\n[table]\n");
     s.push_str(&row("Formato", &fmt_line));
     s.push_str(&row("Duração", &duration_cell(a, ctx)));
     s.push_str(&row("Loudness", &loudness_cell(a)));
@@ -1550,7 +1550,7 @@ pub fn render_multi(items: &[(AudioAnalysis, ReportContext)]) -> String {
         header.push_str(&format!(" · {fps} fps"));
     }
     let mut s = format!(
-        "[b]{REPORT_TITLE}[/b] ({} arquivos · {header})\n",
+        "[h2]{REPORT_TITLE} ({} arquivos · {header})[/h2]\n",
         items.len()
     );
     s.push_str(&merge_findings(&all_findings));
@@ -1710,11 +1710,14 @@ pub fn attach_package_report<FLog: FnMut(String)>(
     }
 }
 
-/// Localiza o relatório gerado na descrição: do título `[b]Análise de Áudio[/b]` até a
+/// Localiza o relatório gerado na descrição: do título `[h2]Análise de Áudio` (ou o antigo
+/// `[b]Análise de Áudio[/b]`, de descrições geradas por versões anteriores) até a
 /// próxima linha em branco (o relatório nunca contém linhas em branco). Sobrevive a edições
 /// dentro do bloco, ao contrário de procurar o texto original.
 fn report_section(description: &str) -> Option<(usize, usize)> {
-    let start = description.find(&format!("[b]{REPORT_TITLE}[/b]"))?;
+    let start = description
+        .find(&format!("[h2]{REPORT_TITLE}"))
+        .or_else(|| description.find(&format!("[b]{REPORT_TITLE}[/b]")))?;
     let rest = &description[start..];
     let end = regex::Regex::new(r"\r?\n[ \t]*\r?\n")
         .ok()?
@@ -1991,7 +1994,7 @@ mod tests {
     #[test]
     fn upsert_replaces_edited_report_and_remove_keeps_rest() {
         let old = format!("[b]{REPORT_TITLE}[/b]\n[table]\nlinha editada pelo usuário\n[/table]");
-        let new = format!("[b]{REPORT_TITLE}[/b]\n[table]\nnovo\n[/table]");
+        let new = format!("[h2]{REPORT_TITLE}[/h2]\n[table]\nnovo\n[/table]");
         let mut d = format!("Fonte: X\n\n{old}\n\n[img]espectro[/img]");
         upsert_report(&mut d, &new);
         assert_eq!(d, format!("Fonte: X\n\n{new}\n\n[img]espectro[/img]"));

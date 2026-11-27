@@ -90,6 +90,17 @@ pub async fn inject_torrent(
     }
 }
 
+/// Remove um `.torrent` temporário do output após o upload real. Retorna uma mensagem de log.
+pub fn remove_torrent_file(path: &Path) -> String {
+    match std::fs::remove_file(path) {
+        Ok(()) => format!(".torrent removido do output: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            format!(".torrent já não existe: {}", path.display())
+        }
+        Err(e) => format!("[AVISO] Não foi possível remover {}: {e}", path.display()),
+    }
+}
+
 /// Testa a conectividade/autenticação com o cliente BitTorrent configurado.
 pub async fn test_connection(cfg: &TorrentClientConfig) -> Result<String> {
     match cfg.client_type {
