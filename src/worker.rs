@@ -351,6 +351,11 @@ pub fn spawn_worker(cancel: CancelHandle) -> WorkerHandle {
                             cfg.image_host.host_type.label()
                         )));
                         let uploaded = upload_image(&png_path, &cfg.image_host).await?;
+                        for f in &uploaded.failures {
+                            let _ = tx_log.send(WorkerEvent::Log(format!(
+                                "Falha no host de imagens, usando fallback — {f}"
+                            )));
+                        }
                         let _ = tx_log.send(WorkerEvent::Log(format!(
                             "Espectrograma hospedado em {}: {}",
                             uploaded.host_name, uploaded.raw_url

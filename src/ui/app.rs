@@ -841,7 +841,7 @@ impl CapybaraApp {
                     match res {
                         Ok(uploaded) => {
                             let bbcode = uploaded.to_bbcode();
-                            if !self.meta.description.contains(&uploaded.img_url) {
+                            if !self.meta.description.contains(&uploaded.raw_url) {
                                 if !self.meta.description.trim().is_empty() {
                                     self.meta.description.push_str("\n\n");
                                 }

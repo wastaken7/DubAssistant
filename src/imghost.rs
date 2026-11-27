@@ -12,13 +12,15 @@ pub struct UploadedImage {
     pub raw_url: String,
     pub web_url: String,
     pub host_name: String,
+    /// Hosts that failed before this one succeeded (fallback), as "Host: erro".
+    pub failures: Vec<String>,
 }
 
 impl UploadedImage {
     pub fn to_bbcode(&self) -> String {
         format!(
-            "[center][b]Espectrograma de Áudio[/b]\n[url={}][img]{}[/img][/url][/center]",
-            self.web_url, self.img_url
+            "[center][b]Espectrograma de Áudio[/b]\n[img]{}[/img][/center]",
+            self.raw_url
         )
     }
 }
@@ -34,30 +36,99 @@ pub async fn upload_image(image_path: &Path, cfg: &ImageHostConfig) -> Result<Up
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "spectrogram.png".to_string());
 
-    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
+    // Some hosts (e.g. Catbox) reset connections that send no User-Agent.
+    let client = Client::builder()
+        .user_agent(concat!("DubAssistant/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(60))
+        .build()?;
 
-    match cfg.host_type {
-        ImageHostType::Pixhost => upload_pixhost(&client, bytes, &filename).await,
-        ImageHostType::Catbox => upload_catbox(&client, bytes, &filename, cfg).await,
-        ImageHostType::ImgBB => upload_imgbb(&client, bytes, cfg).await,
+    let order = cfg.upload_order();
+    let mut failures: Vec<String> = Vec::new();
+    for host in order {
+        let key = cfg.key_for(host);
+        match upload_to(&client, host, bytes.clone(), &filename, key, &cfg.custom_url).await {
+            Ok(mut up) => {
+                up.failures = failures;
+                return Ok(up);
+            }
+            Err(e) => failures.push(format!("{}: {e:#}", host_name(host))),
+        }
+    }
+    bail!(
+        "Falha ao enviar a imagem em todos os hosts tentados:
+{}",
+        failures.join("
+")
+    )
+}
+
+fn host_name(host: ImageHostType) -> &'static str {
+    match host {
+        ImageHostType::Pixhost => "Pixhost",
+        ImageHostType::Catbox => "Catbox",
+        ImageHostType::ImgBB => "ImgBB",
+        ImageHostType::OnlyImage => "OnlyImage",
+        ImageHostType::Lensdump => "Lensdump",
+        ImageHostType::Zipline => "Zipline",
+        ImageHostType::PtScreens => "PTScreens",
+        ImageHostType::PassTheImage => "PassTheImage",
+        ImageHostType::LostImg => "LostImg",
+    }
+}
+
+async fn upload_to(
+    client: &Client,
+    host: ImageHostType,
+    bytes: Vec<u8>,
+    filename: &str,
+    key: &str,
+    custom_url: &str,
+) -> Result<UploadedImage> {
+    match host {
+        ImageHostType::Pixhost => upload_pixhost(client, bytes, filename).await,
+        ImageHostType::Catbox => upload_catbox(client, bytes, filename, key).await,
+        ImageHostType::ImgBB => upload_imgbb(client, bytes, key).await,
         ImageHostType::OnlyImage => {
             upload_chevereto(
-                &client,
+                client,
                 bytes,
-                &filename,
+                filename,
                 "https://onlyimage.org/api/1/upload",
-                &cfg.api_key,
+                key,
                 "OnlyImage",
             )
             .await
         }
-        ImageHostType::Lensdump => upload_lensdump(&client, bytes, cfg).await,
+        ImageHostType::Lensdump => upload_lensdump(client, bytes, key).await,
+        ImageHostType::PtScreens => {
+            upload_chevereto_header(
+                client,
+                bytes,
+                filename,
+                "https://ptscreens.com/api/1/upload",
+                key,
+                "PTScreens",
+            )
+            .await
+        }
+        ImageHostType::PassTheImage => {
+            upload_chevereto_header(
+                client,
+                bytes,
+                filename,
+                "https://passtheima.ge/api/1/upload",
+                key,
+                "PassTheImage",
+            )
+            .await
+        }
+        ImageHostType::LostImg => upload_lostimg(client, bytes, filename, key).await,
         ImageHostType::Zipline => {
-            let url = cfg.custom_url.trim();
+            let url = custom_url.trim();
             if url.is_empty() {
                 bail!("URL do Zipline não configurada nas Configurações.");
             }
-            upload_zipline(&client, bytes, &filename, url, &cfg.api_key, "Zipline").await
+            upload_zipline(client, bytes, filename, url, key, "Zipline").await
         }
     }
 }
@@ -102,6 +173,7 @@ async fn upload_pixhost(
         raw_url,
         web_url: show_url.to_string(),
         host_name: "Pixhost".to_string(),
+        failures: Vec::new(),
     })
 }
 
@@ -109,7 +181,7 @@ async fn upload_catbox(
     client: &Client,
     bytes: Vec<u8>,
     filename: &str,
-    cfg: &ImageHostConfig,
+    key: &str,
 ) -> Result<UploadedImage> {
     let part = multipart::Part::bytes(bytes)
         .file_name(filename.to_string())
@@ -117,8 +189,8 @@ async fn upload_catbox(
     let mut form = multipart::Form::new()
         .text("reqtype", "fileupload")
         .part("fileToUpload", part);
-    if !cfg.api_key.trim().is_empty() {
-        form = form.text("userhash", cfg.api_key.trim().to_string());
+    if !key.trim().is_empty() {
+        form = form.text("userhash", key.trim().to_string());
     }
 
     let resp = client
@@ -138,15 +210,16 @@ async fn upload_catbox(
         raw_url: url.clone(),
         web_url: url,
         host_name: "Catbox".to_string(),
+        failures: Vec::new(),
     })
 }
 
 async fn upload_imgbb(
     client: &Client,
     bytes: Vec<u8>,
-    cfg: &ImageHostConfig,
+    key: &str,
 ) -> Result<UploadedImage> {
-    let key = cfg.api_key.trim();
+    let key = key.trim();
     if key.is_empty() {
         bail!("API Key do ImgBB não configurada nas Configurações.");
     }
@@ -185,15 +258,16 @@ async fn upload_imgbb(
         raw_url,
         web_url,
         host_name: "ImgBB".to_string(),
+        failures: Vec::new(),
     })
 }
 
 async fn upload_lensdump(
     client: &Client,
     bytes: Vec<u8>,
-    cfg: &ImageHostConfig,
+    key: &str,
 ) -> Result<UploadedImage> {
-    let key = cfg.api_key.trim();
+    let key = key.trim();
     if key.is_empty() {
         bail!("API Key do Lensdump não configurada nas Configurações.");
     }
@@ -225,6 +299,7 @@ async fn upload_lensdump(
         raw_url: url,
         web_url,
         host_name: "Lensdump".to_string(),
+        failures: Vec::new(),
     })
 }
 
@@ -277,7 +352,126 @@ async fn upload_chevereto(
         raw_url,
         web_url,
         host_name: host_name.to_string(),
+        failures: Vec::new(),
     })
+}
+
+/// Chevereto-based hosts that authenticate via the `X-API-Key` header
+/// (PTScreens, PassTheImage).
+async fn upload_chevereto_header(
+    client: &Client,
+    bytes: Vec<u8>,
+    filename: &str,
+    endpoint: &str,
+    api_key: &str,
+    host_name: &str,
+) -> Result<UploadedImage> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        bail!("API Key do {host_name} não configurada nas Configurações.");
+    }
+    let part = multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str("image/png")?;
+    let form = multipart::Form::new().part("source", part);
+
+    let resp = client
+        .post(endpoint)
+        .header("X-API-Key", key)
+        .multipart(form)
+        .send()
+        .await
+        .with_context(|| format!("Erro de rede ao enviar imagem ao {host_name}"))?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    let json: Value = serde_json::from_str(&text).map_err(|_| {
+        anyhow::anyhow!(
+            "{host_name} retornou resposta não-JSON (HTTP {status}): {}",
+            truncate(&text, 200)
+        )
+    })?;
+    if !status.is_success() {
+        let msg = json
+            .pointer("/error/message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("erro desconhecido");
+        bail!("{host_name} falhou (HTTP {status}): {msg}");
+    }
+    let raw_url = json
+        .pointer("/image/url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("{host_name} retornou resposta inválida: {json}"))?
+        .to_string();
+    let img_url = json
+        .pointer("/image/medium/url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&raw_url)
+        .to_string();
+    let web_url = json
+        .pointer("/image/url_viewer")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&raw_url)
+        .to_string();
+
+    Ok(UploadedImage {
+        img_url,
+        raw_url,
+        web_url,
+        host_name: host_name.to_string(),
+        failures: Vec::new(),
+    })
+}
+
+async fn upload_lostimg(
+    client: &Client,
+    bytes: Vec<u8>,
+    filename: &str,
+    key: &str,
+) -> Result<UploadedImage> {
+    let key = key.trim();
+    if key.is_empty() {
+        bail!("API Key do LostImg não configurada nas Configurações.");
+    }
+    let part = multipart::Part::bytes(bytes)
+        .file_name(filename.to_string())
+        .mime_str("image/png")?;
+    let form = multipart::Form::new().part("file[]", part);
+
+    let resp = client
+        .post("https://lostimg.cc/api/v1/images")
+        .bearer_auth(key)
+        .multipart(form)
+        .send()
+        .await
+        .context("Erro de rede ao enviar imagem ao LostImg")?;
+    let status = resp.status();
+    let text = resp.text().await?;
+    let json: Value = serde_json::from_str(&text).map_err(|_| {
+        anyhow::anyhow!(
+            "LostImg retornou resposta não-JSON (HTTP {status}): {}",
+            truncate(&text, 200)
+        )
+    })?;
+    if !status.is_success() {
+        bail!("LostImg falhou (HTTP {status}): {json}");
+    }
+    let url = json
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Resposta LostImg sem URL: {json}"))?
+        .to_string();
+
+    Ok(UploadedImage {
+        img_url: url.clone(),
+        raw_url: url.clone(),
+        web_url: url,
+        host_name: "LostImg".to_string(),
+        failures: Vec::new(),
+    })
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 async fn upload_zipline(
@@ -325,5 +519,6 @@ async fn upload_zipline(
         raw_url: url.clone(),
         web_url: url,
         host_name: host_name.to_string(),
+        failures: Vec::new(),
     })
 }

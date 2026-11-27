@@ -195,6 +195,9 @@ enum CliImageHost {
     Onlyimage,
     Lensdump,
     Zipline,
+    Ptscreens,
+    Passtheimage,
+    Lostimg,
 }
 
 impl From<CliImageHost> for ImageHostType {
@@ -206,6 +209,9 @@ impl From<CliImageHost> for ImageHostType {
             CliImageHost::Onlyimage => ImageHostType::OnlyImage,
             CliImageHost::Lensdump => ImageHostType::Lensdump,
             CliImageHost::Zipline => ImageHostType::Zipline,
+            CliImageHost::Ptscreens => ImageHostType::PtScreens,
+            CliImageHost::Passtheimage => ImageHostType::PassTheImage,
+            CliImageHost::Lostimg => ImageHostType::LostImg,
         }
     }
 }
@@ -251,7 +257,7 @@ struct ConfigSetArgs {
     /// Host de imagens padrão para espectrogramas
     #[arg(long, value_enum)]
     imghost: Option<CliImageHost>,
-    /// API Key / Userhash do host de imagens
+    /// API Key / Userhash do host de imagens (salva para o host de --imghost, ou o atual)
     #[arg(long)]
     imghost_key: Option<String>,
     /// URL customizada do Zipline
@@ -704,6 +710,9 @@ async fn main() -> Result<()> {
             println!("Espectrograma gerado: {}", png.display());
             if upload {
                 let res = upload_image(&png, &cfg.image_host).await?;
+                for f in &res.failures {
+                    eprintln!("Falha no host de imagens, usando fallback — {f}");
+                }
                 println!("Hospedado em {}: {}", res.host_name, res.raw_url);
                 println!("BBCode:\n{}", res.to_bbcode());
             }
@@ -755,7 +764,8 @@ fn apply_config_set(cfg: &mut AppConfig, a: ConfigSetArgs) -> Result<()> {
         cfg.image_host.host_type = h.into();
     }
     if let Some(k) = a.imghost_key {
-        cfg.image_host.api_key = k;
+        let host = cfg.image_host.host_type;
+        cfg.image_host.set_key(host, k);
     }
     if let Some(u) = a.zipline_url {
         cfg.image_host.custom_url = u;
@@ -945,7 +955,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
         cfg.image_host.host_type = h.into();
     }
     if let Some(k) = &args.imghost_key {
-        cfg.image_host.api_key = k.clone();
+        let host = cfg.image_host.host_type;
+        cfg.image_host.set_key(host, k.clone());
     }
     if let Some(d) = args.spectrogram_duration {
         cfg.image_host.spectrogram_duration_secs = d;
@@ -1404,7 +1415,13 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
                 cfg.image_host.host_type.label()
             );
             let uploaded = upload_image(&png, &cfg.image_host).await?;
-            println!("  Espectrograma hospedado: {}", uploaded.raw_url);
+            for f in &uploaded.failures {
+                eprintln!("  Falha no host de imagens, usando fallback — {f}");
+            }
+            println!(
+                "  Espectrograma hospedado em {}: {}",
+                uploaded.host_name, uploaded.raw_url
+            );
             if !meta.description.trim().is_empty() {
                 meta.description.push_str("\n\n");
             }
