@@ -19,7 +19,7 @@ pub struct UploadedImage {
 impl UploadedImage {
     pub fn to_bbcode(&self) -> String {
         format!(
-            "[center][b]Espectrograma de Áudio[/b]\n[img]{}[/img][/center]",
+            "[h2]Espectrograma de Áudio[/h2]\n[center][img]{}[/img][/center]",
             self.raw_url
         )
     }
@@ -34,10 +34,8 @@ pub async fn upload_image(image_path: &Path, cfg: &ImageHostConfig) -> Result<Up
     }
     let bytes = std::fs::read(image_path)
         .with_context(|| format!("Falha ao ler imagem: {}", image_path.display()))?;
-    let filename = image_path
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "spectrogram.png".to_string());
+    // Nome neutro (hash do conteúdo) para não expor o nome da mídia aos hosts.
+    let filename = hashed_filename(&bytes);
 
     // Some hosts (e.g. Catbox) reset connections that send no User-Agent.
     let client = Client::builder()
@@ -74,6 +72,11 @@ pub async fn upload_image(image_path: &Path, cfg: &ImageHostConfig) -> Result<Up
 "
         )
     )
+}
+
+fn hashed_filename(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    format!("{}.png", hex::encode(Sha1::digest(bytes)))
 }
 
 fn host_name(host: ImageHostType) -> &'static str {
@@ -523,4 +526,17 @@ async fn upload_zipline(
         host_name: host_name.to_string(),
         failures: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hashed_filename_is_content_sha1() {
+        assert_eq!(
+            hashed_filename(b"abc"),
+            "a9993e364706816aba3e25717850c26c9cd0d89d.png"
+        );
+    }
 }

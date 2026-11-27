@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use dub_assistant::cancel::CancelHandle;
 use dub_assistant::capybara::client::CapybaraClient;
-use dub_assistant::clients::{inject_torrent, test_connection};
+use dub_assistant::clients::{inject_torrent, remove_torrent_file, test_connection};
 use dub_assistant::config::{
     config_file_path, load_config, save_config, AppConfig, ImageHostType, TorrentClientType,
 };
@@ -1479,6 +1479,8 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
     let upload = client.upload_dublagem(&meta, &pkg.torrent_path).await?;
     println!("  {}", upload.message);
     println!("  URL: {}", upload.final_url);
+    // Upload real concluído: o .torrent local não é mais necessário.
+    println!("  {}", remove_torrent_file(&pkg.torrent_path));
 
     if !args.no_inject && cfg.auto_download_and_inject {
         let tid_str = upload.torrent_id.as_deref().unwrap_or("");
@@ -1510,6 +1512,11 @@ async fn run_upload(cfg: &mut AppConfig, args: UploadArgs, cancel: &CancelHandle
             )
             .await?;
             println!("  Cliente BitTorrent: {inj}");
+            // Já injetado no cliente: não deixa o .torrent baixado no output.
+            // Sem cliente configurado, o arquivo baixado é o próprio entregável.
+            if cfg.torrent_client.client_type != TorrentClientType::None {
+                println!("  {}", remove_torrent_file(&dl.path));
+            }
         }
     }
 
