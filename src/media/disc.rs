@@ -623,7 +623,10 @@ where
                 }
                 let mut cmd = Command::new(eac3to);
                 cmd.arg(&disc.root_dir).arg(format!("{})", title.index));
-                cmd.arg(format!("{}:{}", audio_track.id, audio_dest.to_string_lossy()));
+                // eac3to espera "N:" e o caminho como argumentos separados. Com
+                // "N:C:\..." num único argumento ele ignora o número da faixa
+                // (escolhe faixas sozinho) ou usa "N:C:\..." como nome de arquivo.
+                cmd.arg(format!("{}:", audio_track.id)).arg(&audio_dest);
 
                 let sel_subs: Vec<&MediaTrack> = title
                     .tracks
@@ -638,7 +641,7 @@ where
                     if sub_paths.contains(&dest) || dest.exists() {
                         dest = out_folder.join(format!("{base} #{}.sup", sub_i + 1));
                     }
-                    cmd.arg(format!("{}:{}", sub.id, dest.to_string_lossy()));
+                    cmd.arg(format!("{}:", sub.id)).arg(&dest);
                     sub_paths.push(dest);
                 }
 
@@ -646,7 +649,7 @@ where
                 if let Some(chap_id) = title.chapters_track_id {
                     if meta.category == Category::Movie && idx == 0 {
                         let cpath = out_folder.join("chapters.txt");
-                        cmd.arg(format!("{chap_id}:{}", cpath.to_string_lossy()));
+                        cmd.arg(format!("{chap_id}:")).arg(&cpath);
                         chap_dest = Some(cpath);
                     }
                 }
