@@ -153,6 +153,8 @@ pub struct AppConfig {
     pub auto_download_and_inject: bool,
     /// Anexa à descrição um relatório de análise do áudio (loudness, canais, banda, clipping, silêncios).
     pub audio_report: bool,
+    /// Verifica ao iniciar se há uma versão mais nova nos Releases do GitHub.
+    pub check_updates: bool,
     pub torrent_client: TorrentClientConfig,
     pub image_host: ImageHostConfig,
 }
@@ -173,6 +175,7 @@ impl Default for AppConfig {
             default_anon: false,
             auto_download_and_inject: true,
             audio_report: true,
+            check_updates: true,
             torrent_client: TorrentClientConfig::default(),
             image_host: ImageHostConfig::default(),
         }

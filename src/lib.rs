@@ -8,4 +8,5 @@ pub mod media;
 pub mod tmdb;
 pub mod torrent;
 pub mod ui;
+pub mod update;
 pub mod worker;
