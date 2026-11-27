@@ -285,6 +285,20 @@ pub fn show(app: &mut CapybaraApp, ui: &mut egui::Ui) {
             });
     });
 
+    ui.add_space(8.0);
+
+    // 6. Atualizações
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.label(egui::RichText::new("Atualizações").strong());
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut app.config.check_updates,
+                "Verificar nova versão no GitHub ao iniciar",
+            );
+            ui.label(format!("(versão atual: v{})", crate::update::CURRENT_VERSION));
+        });
+    });
+
     ui.add_space(10.0);
     if ui.button("Salvar Configurações").clicked() {
         match save_config(&app.config) {

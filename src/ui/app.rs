@@ -18,8 +18,10 @@ use crate::ui::tabs;
 use crate::worker::{
     spawn_worker, UploadPipelineResult, WorkerCommand, WorkerEvent, WorkerHandle,
 };
+use crate::update::{spawn_update_check, UpdateInfo, CURRENT_VERSION};
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppTab {
@@ -62,6 +64,11 @@ pub struct CapybaraApp {
     pub client_status: Option<Result<String, String>>,
     pub status_banner: Option<(bool, String)>,
 
+    // Aviso de nova versão no GitHub
+    update_rx: Option<Receiver<Option<UpdateInfo>>>,
+    pub update_available: Option<UpdateInfo>,
+    update_dismissed: bool,
+
     pub cancel: CancelHandle,
     pub worker: WorkerHandle,
 }
@@ -99,9 +106,15 @@ impl CapybaraApp {
             dupe_results: None,
             client_status: None,
             status_banner: None,
+            update_rx: None,
+            update_available: None,
+            update_dismissed: false,
             cancel,
             worker,
         };
+        if app.config.check_updates {
+            app.update_rx = Some(spawn_update_check());
+        }
         if !initial_paths.is_empty() {
             app.load_paths(initial_paths);
         }
@@ -393,6 +406,27 @@ impl CapybaraApp {
             torrent_path: pkg.torrent_path.clone(),
             auto_download_and_inject: self.config.auto_download_and_inject,
         });
+    }
+
+    fn poll_update_check(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.update_rx else { return };
+        match rx.try_recv() {
+            Ok(result) => {
+                self.update_rx = None;
+                if let Some(info) = result {
+                    self.push_log(format!(
+                        "Nova versão disponível: {} (atual: v{CURRENT_VERSION}) — {}",
+                        info.tag, info.url
+                    ));
+                    self.update_available = Some(info);
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                // Garante que a UI acorde para exibir o aviso mesmo sem interação.
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            Err(TryRecvError::Disconnected) => self.update_rx = None,
+        }
     }
 
     fn poll_worker_events(&mut self) {
@@ -910,6 +944,7 @@ impl eframe::App for CapybaraApp {
         }
 
         self.poll_worker_events();
+        self.poll_update_check(ctx);
 
         // Suporte nativo a Drag & Drop em qualquer lugar da janela
         let dropped_paths: Vec<PathBuf> = ctx.input(|i| {
@@ -978,6 +1013,36 @@ impl eframe::App for CapybaraApp {
             });
             ui.add_space(4.0);
         });
+
+        // Aviso de nova versão disponível
+        if let (Some(info), false) = (&self.update_available, self.update_dismissed) {
+            let mut dismiss = false;
+            egui::TopBottomPanel::top("update_banner")
+                .frame(
+                    egui::Frame::side_top_panel(&ctx.style())
+                        .fill(egui::Color32::from_rgb(30, 70, 110)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(
+                            egui::Color32::WHITE,
+                            format!(
+                                "Nova versão disponível: {} (atual: v{CURRENT_VERSION})",
+                                info.tag
+                            ),
+                        );
+                        ui.hyperlink_to("Baixar no GitHub", &info.url);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Fechar").on_hover_text("Dispensar aviso").clicked() {
+                                dismiss = true;
+                            }
+                        });
+                    });
+                });
+            if dismiss {
+                self.update_dismissed = true;
+            }
+        }
 
         // Banner de status no rodapé
         egui::TopBottomPanel::bottom("bottom_status").show(ctx, |ui| {
