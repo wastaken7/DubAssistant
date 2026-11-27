@@ -1033,7 +1033,7 @@ impl eframe::App for CapybaraApp {
                         );
                         ui.hyperlink_to("Baixar no GitHub", &info.url);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✕").on_hover_text("Dispensar").clicked() {
+                            if ui.small_button("Fechar").on_hover_text("Dispensar aviso").clicked() {
                                 dismiss = true;
                             }
                         });
